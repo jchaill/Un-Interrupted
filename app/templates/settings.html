@@ -88,15 +88,11 @@
 <section class="card" id="ai-detection">
   <div class="card-head">
     <h2>AI ad detection</h2>
-    <span class="pill {{ 'ok' if llm.enabled else 'muted' }}">{{ 'enabled' if llm.enabled else 'off' }}</span>
+    <span class="pill ok">always on</span>
   </div>
-  <p class="muted small">Optional semantic pass through Ollama. It finds rotating or host-read sponsor breaks that the regex labels miss. The deterministic cutter and QA still make the final decision. <strong>Transcript text leaves this Mac</strong> when a cloud model is used; Ollama says cloud prompts are not used for training.</p>
+  <p class="muted small">Every detection job runs a semantic pass through Ollama after the regex/repeat detector. This is how rotating, host-read, and new sponsor breaks are caught on each episode. The deterministic cutter and QA still make the final decision. <strong>Transcript text leaves this Mac</strong> when a cloud model is used; Ollama says cloud prompts are not used for training.</p>
+  <p class="muted small">If Ollama is unreachable, the episode still reaches review with heuristic cuts and an LLM error warning. LLM-only cuts are always sent to review and never auto-published.</p>
   <form method="post" action="/settings/llm" class="form-grid">
-    <label class="field checkbox-field span-2">
-      <input type="checkbox" name="llm_enabled" {{ 'checked' if llm.enabled else '' }}>
-      <span>Run LLM ad detection after the heuristic detector</span>
-      <small>Off by default. LLM-only cuts are always sent to review and never auto-published.</small>
-    </label>
     <label class="field">
       <span>Ollama model</span>
       <input type="text" name="llm_model" value="{{ llm.model }}" placeholder="deepseek-v4.1-flash:cloud" spellcheck="false">

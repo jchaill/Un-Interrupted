@@ -224,7 +224,7 @@ def test_settings_llm_saves_and_masks_key(app_env, monkeypatch):
         follow_redirects=False,
     )
     cfg = config.load_config()
-    assert cfg["llm_enabled"] == 0
+    assert cfg["llm_enabled"] == 1
     assert cfg["llm_api_key"] == ""
 
 

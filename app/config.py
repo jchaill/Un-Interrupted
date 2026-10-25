@@ -101,9 +101,9 @@ def default_config() -> dict[str, Any]:
         "min_free_gb": 5,
         "default_retention_days": 30,
         "toolchain_ready": False,
-        # Optional semantic ad detection through Ollama. Off by default so a
-        # fresh install never sends transcripts off the machine unasked.
-        "llm_enabled": False,
+        # Semantic ad detection through Ollama. Always runs on every detect
+        # job; the model/endpoint are configurable, the pass is not optional.
+        "llm_enabled": True,
         "llm_model": "deepseek-v4.1-flash:cloud",
         "llm_base_url": "http://127.0.0.1:11434",
         "llm_api_key": "",

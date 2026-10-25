@@ -332,38 +332,35 @@ def handle_detect(job: dict[str, Any], log: Path) -> None:
     _write_log(log, "\n--- detect report ---\n" + output[-12000:])
 
     llm_result: dict[str, Any] | None = None
-    if llm.is_enabled(cfg):
-        opts = llm.settings(cfg)
+    opts = llm.settings(cfg)
+    _write_log(
+        log,
+        f"\n--- LLM ad detection ({opts['model']} via {llm.endpoint(opts['base_url'])}) ---",
+    )
+    try:
+        llm_result = llm.analyze(
+            podcast=podcast,
+            transcript=paths["transcript"],
+            total_duration=total,
+            cfg=cfg,
+            known_cuts=[
+                {"start": row[0], "end": row[1]}
+                for row in cuts
+                if isinstance(row, (list, tuple)) and len(row) >= 2
+            ],
+        )
+        before = len(cuts)
+        cuts = llm.merge_cuts(cuts, llm_result.get("ads") or [], total_duration=total)
         _write_log(
             log,
-            f"\n--- LLM ad detection ({opts['model']} via {llm.endpoint(opts['base_url'])}) ---",
+            f"LLM proposed {len(llm_result.get('ads') or [])} ad(s) across "
+            f"{llm_result.get('chunks', 0)} chunk(s); "
+            f"{len(llm_result.get('rejected') or [])} rejected; "
+            f"cut list {before} -> {len(cuts)}.",
         )
-        try:
-            llm_result = llm.analyze(
-                podcast=podcast,
-                transcript=paths["transcript"],
-                total_duration=total,
-                cfg=cfg,
-                known_cuts=[
-                    {"start": row[0], "end": row[1]}
-                    for row in cuts
-                    if isinstance(row, (list, tuple)) and len(row) >= 2
-                ],
-            )
-            before = len(cuts)
-            cuts = llm.merge_cuts(cuts, llm_result.get("ads") or [], total_duration=total)
-            _write_log(
-                log,
-                f"LLM proposed {len(llm_result.get('ads') or [])} ad(s) across "
-                f"{llm_result.get('chunks', 0)} chunk(s); "
-                f"{len(llm_result.get('rejected') or [])} rejected; "
-                f"cut list {before} -> {len(cuts)}.",
-            )
-        except Exception as exc:  # The heuristic detector remains authoritative.
-            llm_result = llm.failed_result(str(exc), cfg)
-            _write_log(log, f"LLM detection failed; continuing with heuristic cuts: {exc}")
-    else:
-        _write_log(log, "LLM ad detection is disabled; using heuristic cuts only.")
+    except Exception as exc:  # Keep the pipeline usable if Ollama is down.
+        llm_result = llm.failed_result(str(exc), cfg)
+        _write_log(log, f"LLM detection failed; continuing with heuristic cuts: {exc}")
 
     review = build_review(
         paths["transcript"],

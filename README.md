@@ -5,9 +5,10 @@ feeds, downloads episodes, removes ads with a local Whisper-based pipeline, and
 publishes one clean, private RSS feed per show for Overcast (or any podcast
 client).
 
-No cloud service by default, no Docker, no phone-side setup. The audio never
-leaves your Mac except when your podcast app streams it over the LAN. An
-optional LLM pass can send transcript text to Ollama cloud if you enable it.
+No Docker and no phone-side setup. The audio never leaves your Mac except when
+your podcast app streams it over the LAN. Every detection job runs an AI pass
+through Ollama; with a cloud model, transcript text is sent to Ollama. Use a
+local Ollama model if that is not acceptable.
 
 **Status:** working MVP, end-to-end pipeline verified on an M1 Mac mini. See
 [PLAN.md](PLAN.md) for the design, decisions, and remaining work.
@@ -26,8 +27,8 @@ optional LLM pass can send transcript text to Ollama cloud if you enable it.
 - One private feed per podcast, with local artwork and HTTP Range streaming.
 - Per-show settings: language, ad labels, retention, poll interval,
   auto-process, auto-publish.
-- Optional **AI ad detection** through Ollama (local or cloud) for sponsor reads
-  that rotate over time and do not match the regex labels.
+- **AI ad detection on every episode** through Ollama (local or cloud), so
+  rotating or newly sold sponsor reads do not depend on a fixed regex list.
 - Browse older episodes and flag individual ones for processing.
 - Copy feed URL / QR code straight into Overcast.
 
@@ -132,12 +133,13 @@ cut, QA, publish).
 
 ---
 
-## Optional AI ad detection (Ollama)
+## AI ad detection (Ollama)
 
-The heuristic detector is always the baseline. You can add a semantic pass that
-reads the timestamped transcript and proposes ad ranges by their *shape*
-(host-read, produced spot, promo code, free trial, CTA), not only by a fixed
-sponsor list. This is useful when a show swaps sponsors over time.
+The heuristic detector is the baseline. Every detection job also runs a
+semantic pass that reads the timestamped transcript and proposes ad ranges by
+their *shape* (host-read, produced spot, promo code, free trial, CTA), not only
+by a fixed sponsor list. This runs on every episode because sponsors rotate and
+new reads appear without a regex update.
 
 1. Make sure Ollama is signed in to your Ollama account. The app uses the same
    local daemon as Pi by default:
@@ -147,11 +149,13 @@ sponsor list. This is useful when a show swaps sponsors over time.
    ollama run deepseek-v4.1-flash:cloud "Reply with JSON only: {\"ok\":true}"
    ```
 
-2. In **Settings → AI ad detection**, tick **Run LLM ad detection**, keep
-   `deepseek-v4.1-flash:cloud`, and click **Test Ollama connection**.
+2. In **Settings → AI ad detection**, keep `deepseek-v4.1-flash:cloud` and
+   click **Test Ollama connection**. There is no enable toggle: the pass runs
+   after every heuristic detection.
 
-3. Run **Re-detect** on an episode. The review screen shows an `LLM 91%` badge
-   and the brand next to each proposed range.
+3. Open an episode review. The screen shows an `LLM 91%` badge and the brand
+   next to each proposed range. **Re-detect** re-runs both passes on an existing
+   transcript.
 
 Defaults:
 
@@ -168,9 +172,10 @@ Defaults:
 - If Ollama is unreachable, the job still finishes with the heuristic cuts and
   the review shows the LLM error.
 
-> **Privacy:** cloud inference sends transcript text to Ollama. Ollama states
-> that cloud prompts/responses are not used for training and are not stored as
-> content. Keep the feature off if that trade-off is not acceptable.
+> **Privacy:** cloud inference sends transcript text to Ollama on every
+> detection job. Ollama states that cloud prompts/responses are not used for
+> training and are not stored as content. Configure a local model instead if
+> that trade-off is not acceptable.
 
 ---
 
@@ -291,7 +296,7 @@ base URL, port, and defaults. It is written atomically with mode `0600`.
 - If you expose it beyond the LAN, put it behind Tailscale or an HTTPS reverse
   proxy, set the base URL accordingly, and add CSRF protection first.
 - No telemetry. Outbound requests are feed/artwork downloads, the first-run
-  model/toolchain install, and Ollama calls when AI ad detection is enabled.
+  model/toolchain install, and Ollama calls on every detection job.
 
 ---
 

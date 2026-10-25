@@ -49,7 +49,7 @@ The phone only talks to this Mac. Original feeds are never exposed.
 | Audio | Preserve source format when possible; MP3 uses the upstream stream-copy cutter, other containers use an ffmpeg re-encode fallback |
 | Language | Auto-detect from the feed, editable per show (`auto`/`fr`/`en`/…); Whisper and QA share it |
 | Ads | Default policy: remove clear sponsor/network reads and repeated blocks; flag ambiguous cuts for review |
-| LLM | Optional Ollama semantic pass (local or cloud); suggestions only, deterministic cutter/QA stay authoritative |
+| LLM | Ollama semantic pass on every detect job (local or cloud); suggestions only, deterministic cutter/QA stay authoritative |
 | Port | `8090` by default; auto-detected LAN IP; both editable at setup/settings |
 | Storage | GUI-selected root; default `~/Podcasts/Un-Interupted`; relocatable from Settings |
 | Spelling | Folder/repo stays `Un-Interupted` |
@@ -176,7 +176,7 @@ is kept for RSS ordering and display.
    guard, never overwrite an existing original.
 3. **Transcribe** — `transcribe.sh` with the app model and podcast language.
 4. **Detect** — `detect_cuts.py` with per-podcast labels, show-stop, ad language;
-   optionally merge Ollama segment-ID proposals; build a review object with cut
+   always merge Ollama segment-ID proposals; build a review object with cut
    excerpts, labels, repeats, LLM provenance, warnings, and a confidence score.
 5. **Review** — default stop. The UI lets the user edit/delete/add ranges,
    approve, skip, re-detect, or re-cut.
@@ -201,10 +201,10 @@ review only if:
 
 Otherwise it stays in `awaiting_review`.
 
-### 6.1 Optional LLM-assisted detection (implemented)
+### 6.1 LLM-assisted detection (implemented, always on)
 
 The deterministic detector remains the baseline and the final cutter/QA stays
-unchanged. An optional pass sends transcript *segments* (never audio) to an
+unchanged. Every detect job sends transcript *segments* (never audio) to an
 Ollama chat model and asks for JSON ranges by segment ID. It does not receive
 timestamps and never edits audio itself.
 
@@ -309,8 +309,8 @@ access and roughly 1 GB of free space.
   exposing beyond the LAN, and set the base URL to the reachable address.
 - No CSRF tokens yet (single-user LAN app). Add them before any public exposure.
 - The app does not phone home. Outbound calls are feed/artwork/model downloads
-  and Ollama requests when AI ad detection is enabled. Cloud inference sends
-  transcript text; it is off by default.
+  and Ollama requests on every detect job. Cloud inference sends transcript
+  text; configure a local Ollama model if that is not acceptable.
 
 ---
 

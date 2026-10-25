@@ -72,12 +72,6 @@ class LLMError(RuntimeError):
     pass
 
 
-def _as_bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def settings(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg = cfg or config.load_config()
     model = (
@@ -109,7 +103,7 @@ def settings(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     except (TypeError, ValueError):
         timeout = DEFAULT_TIMEOUT
     return {
-        "enabled": _as_bool(cfg.get("llm_enabled")),
+        "enabled": True,
         "model": model,
         "base_url": base_url.rstrip("/"),
         "api_key": api_key,
@@ -117,10 +111,6 @@ def settings(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
         "max_chars": max(4_000, min(80_000, max_chars)),
         "timeout": max(30.0, min(900.0, timeout)),
     }
-
-
-def is_enabled(cfg: dict[str, Any] | None = None) -> bool:
-    return settings(cfg)["enabled"]
 
 
 def endpoint(base_url: str) -> str:

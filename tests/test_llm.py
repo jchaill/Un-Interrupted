@@ -207,7 +207,7 @@ def test_settings_reads_env_override(monkeypatch):
     opts = llm.settings({"llm_enabled": 0, "llm_model": "stored:cloud"})
     assert opts["model"] == "from-env:cloud"
     assert opts["api_key"] == "secret"
-    assert opts["enabled"] is False
+    assert opts["enabled"] is True
     assert opts["min_confidence"] == config.default_config()["llm_min_confidence"]
 
 

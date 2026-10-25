@@ -1201,14 +1201,13 @@ async def settings_llm(request: Request):
     elif not api_key:
         api_key = str(cfg.get("llm_api_key") or "")
     config.update_config(
-        llm_enabled=1 if form.get("llm_enabled") is not None else 0,
+        llm_enabled=1,
         llm_model=model,
         llm_base_url=base_url,
         llm_api_key=api_key,
         llm_min_confidence=min_confidence,
     )
-    state = "enabled" if form.get("llm_enabled") is not None else "disabled"
-    return _redirect("/settings", msg=f"AI ad detection {state}.")
+    return _redirect("/settings", msg="AI ad detection settings saved.")
 
 
 @app.post("/settings/llm/test")

@@ -189,8 +189,8 @@ not enable auto-publish until the ranges are consistently right.
 
 ### AI ad detection does not run or finds nothing
 
-- Check **Settings → AI ad detection** is enabled and **Test Ollama
-  connection** succeeds.
+- Check **Settings → AI ad detection → Test Ollama connection** succeeds. The
+  pass is always on; there is no enable toggle.
 - The default endpoint `http://127.0.0.1:11434` uses the signed-in Ollama app.
   Run `ollama signin` and make sure the Ollama menu-bar app is running.
 - Cloud models do not need `ollama pull`, but the model name must end in
