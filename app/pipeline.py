@@ -472,6 +472,7 @@ def handle_cut(job: dict[str, Any], log: Path) -> None:
     cuts = _normalized_cuts(episode)
     if not cuts:
         _set_status(episode["id"], "cutting")
+        paths["cuts"].parent.mkdir(parents=True, exist_ok=True)
         paths["cuts"].write_text("[]", encoding="utf-8")
         _copy_as_clean(source, paths["clean"], log)
         duration = probe_duration(paths["clean"]) or episode.get("duration_original")
