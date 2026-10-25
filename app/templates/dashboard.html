@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · Un-Interupted{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Your library</h1>
+    <p class="muted">Subscribe to the clean feeds in Overcast. New episodes wait for your review by default.</p>
+  </div>
+  <div class="head-actions">
+    <a class="btn ghost" href="/podcasts/import">Import OPML</a>
+    <a class="btn primary" href="/podcasts/add">Add podcast</a>
+  </div>
+</div>
+
+{% if not tools_ready %}
+<div class="banner warn">
+  <div><strong>Processing is not ready.</strong> Install ffmpeg, whisper.cpp and the Whisper model before episodes can be transcribed.</div>
+  <a class="btn small" href="/settings">Open toolchain</a>
+</div>
+{% endif %}
+{% if not worker.alive %}
+<div class="banner bad">
+  <div><strong>The worker is not running.</strong> Downloads and processing will not start. Check the app process.</div>
+  <a class="btn small" href="/queue">Open queue</a>
+</div>
+{% endif %}
+
+<section class="stats-grid">
+  <div class="stat"><span class="stat-label">Podcasts</span><strong>{{ podcasts | length }}</strong><small>{{ counts.get('published', 0) }} published episodes</small></div>
+  <div class="stat"><span class="stat-label">Awaiting review</span><strong class="{{ 'warn-text' if counts.get('awaiting_review', 0) else '' }}">{{ counts.get('awaiting_review', 0) + counts.get('qa_failed', 0) }}</strong><small>{{ counts.get('qa_failed', 0) }} QA failure(s)</small></div>
+  <div class="stat"><span class="stat-label">Queue</span><strong>{{ queue_total }}</strong><small>{{ job_counts.get('running', 0) }} running</small></div>
+  <div class="stat"><span class="stat-label">Library</span><strong>{{ library_bytes | human_size }}</strong><small>{% if disk %}{{ disk.free | human_size }} free of {{ disk.total | human_size }}{% endif %}</small></div>
+</section>
+
+{% if podcasts %}
+<section class="podcast-grid">
+  {% for p in podcasts %}
+  <a class="podcast-card" href="/podcasts/{{ p.slug }}">
+    <img class="podcast-art" src="/podcast-art/{{ p.slug }}.svg" alt="" loading="lazy">
+    <div class="podcast-card-body">
+      <div class="podcast-card-head">
+        <h3>{{ p.title }}</h3>
+        {% if p.review_count %}<span class="pill warn">{{ p.review_count }} to review</span>{% endif %}
+      </div>
+      <p class="muted clamp-2">{{ (p.description or '') | strip_html(180) or 'No description.' }}</p>
+      <div class="podcast-meta">
+        <span>{{ p.published_count }} published</span>
+        <span>{{ p.episode_count }} in feed</span>
+        <span>{{ p.last_polled_at | fmt_dt }}</span>
+      </div>
+      {% if p.last_error %}<div class="inline-err">{{ p.last_error | strip_html(120) }}</div>{% endif %}
+    </div>
+  </a>
+  {% endfor %}
+</section>
+{% else %}
+<section class="empty-state">
+  <h2>No podcasts yet</h2>
+  <p class="muted">Paste an official RSS feed URL. The app downloads the latest three episodes and removes the ads.</p>
+  <div class="form-actions">
+    <a class="btn primary" href="/podcasts/add">Add your first podcast</a>
+    <a class="btn ghost" href="/podcasts/import">Import from OPML</a>
+  </div>
+</section>
+{% endif %}
+
+{% if recent_jobs %}
+<section class="card">
+  <div class="card-head"><h2>Recent activity</h2><a class="link" href="/queue">All jobs →</a></div>
+  <div class="table-wrap">
+    <table class="table compact">
+      <thead><tr><th>Job</th><th>Podcast</th><th>Episode</th><th>State</th><th>When</th></tr></thead>
+      <tbody>
+      {% for job in recent_jobs %}
+        <tr>
+          <td><a href="/jobs/{{ job.id }}">#{{ job.id }} {{ job.type }}</a></td>
+          <td>{{ job.podcast_title or '—' }}</td>
+          <td class="clamp-1">{{ job.episode_title or '—' }}</td>
+          <td><span class="pill {{ job.state | status_class }}">{{ job.state }}</span></td>
+          <td class="muted">{{ (job.finished_at or job.started_at or job.created_at) | fmt_dt }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+{% block title %}Review · {{ episode.title }}{% endblock %}
+{% block content %}
+<div class="page-head review-head">
+  <div>
+    <a class="link" href="/podcasts/{{ podcast.slug }}">← {{ podcast.title }}</a>
+    <h1>{{ episode.title }}</h1>
+    <p class="muted">
+      {{ episode.published_at | fmt_dt('%b %d, %Y') }}
+      · {{ (episode.duration_original | duration) if episode.duration_original else 'duration unknown' }}
+      · <span class="pill {{ episode.status | status_class }}">{{ episode.status | status_label }}</span>
+    </p>
+  </div>
+  <div class="head-actions">
+    {% if latest_job %}<a class="btn ghost small" href="/jobs/{{ latest_job.id }}">Latest job log</a>{% endif %}
+    <a class="btn ghost small" href="/admin/episodes/{{ episode.id }}/transcript" target="_blank">Transcript</a>
+  </div>
+</div>
+
+{% if not tools_ready %}
+<div class="banner warn"><div><strong>Processing toolchain is incomplete.</strong> Cutting and QA will fail until it is installed.</div><a class="btn small" href="/settings">Settings</a></div>
+{% endif %}
+
+{% if not review %}
+<section class="card">
+  <div class="empty-state">
+    <h2>No detection results yet</h2>
+    <p class="muted">{{ 'The transcript exists but no cut plan has been built.' if has_transcript else 'This episode has not been transcribed yet.' }}</p>
+    <div class="form-actions">
+      {% if has_transcript %}
+      <form method="post" action="/podcasts/{{ podcast.slug }}/episodes/{{ episode.id }}/redetect" class="inline"><button class="btn primary" type="submit">Run detection</button></form>
+      {% else %}
+      <form method="post" action="/podcasts/{{ podcast.slug }}/episodes/{{ episode.id }}/process" class="inline"><button class="btn primary" type="submit">Download &amp; transcribe</button></form>
+      {% endif %}
+      <form method="post" action="/podcasts/{{ podcast.slug }}/episodes/{{ episode.id }}/skip" class="inline"><button class="btn ghost" type="submit">Skip episode</button></form>
+    </div>
+  </div>
+</section>
+{% else %}
+<section class="review-grid">
+  <div class="review-left">
+    <div class="card">
+      <div class="card-head"><h2>Audio</h2></div>
+      {% if has_original %}
+      <div class="player-block">
+        <label>Original</label>
+        <audio controls preload="metadata" src="/admin/media/episode/{{ episode.id }}/original"></audio>
+      </div>
+      {% endif %}
+      {% if has_clean_preview %}
+      <div class="player-block">
+        <label>Proposed clean version</label>
+        <audio controls preload="metadata" src="/admin/media/episode/{{ episode.id }}/clean"></audio>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Detection summary</h2></div>
+      <div class="confidence">
+        <div class="confidence-bar"><span style="width: {{ (review.confidence * 100) | round(0) }}%"></span></div>
+        <strong>{{ (review.confidence * 100) | round(0) }}%</strong>
+        <span class="muted">heuristic confidence</span>
+      </div>
+      <div class="mini-stats">
+        <div><span>Blocks</span><strong>{{ review.n_cuts }}</strong></div>
+        <div><span>Removed</span><strong>{{ review.removed_seconds | duration }}</strong></div>
+        <div><span>Share</span><strong>{{ (review.ratio * 100) | round(1) }}%</strong></div>
+        <div><span>Labels hit</span><strong>{{ review.labels_hit }}/{{ review.n_cuts }}</strong></div>
+        <div><span>Repeats</span><strong>{{ review.repeated_blocks }}</strong></div>
+      </div>
+      {% if review.warnings %}
+      <div class="warnings">
+        {% for warning in review.warnings %}
+        <div class="warning-item">{{ warning }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Episode metadata</h2></div>
+      <dl class="meta-list">
+        <dt>GUID</dt><dd class="small-break">{{ episode.guid }}</dd>
+        <dt>Published</dt><dd>{{ episode.published_at | fmt_dt }}</dd>
+        <dt>Original duration</dt><dd>{{ (episode.duration_original | duration) if episode.duration_original else '—' }}</dd>
+        <dt>Original file</dt><dd class="small-break">{{ episode.original_path or 'not downloaded' }}</dd>
+        <dt>Engine</dt><dd>{{ episode.engine_version or tools.engine_version }}</dd>
+      </dl>
+      {% if episode.description %}<p class="muted clamp-4">{{ episode.description | strip_html(600) }}</p>{% endif %}
+    </div>
+  </div>
+
+  <div class="review-right">
+    <form method="post" action="/podcasts/{{ podcast.slug }}/episodes/{{ episode.id }}/approve" id="cuts-form">
+      <section class="card">
+        <div class="card-head">
+          <h2>Cut ranges</h2>
+          <button class="btn ghost small" type="button" id="add-cut">+ Add range</button>
+        </div>
+        <p class="muted small">Times are in seconds. Leave the end blank to cut to the end of the episode.</p>
+        <div class="table-wrap">
+          <table class="table cut-table">
+            <thead><tr><th>Start</th><th>End</th><th>Sponsor / note</th><th></th></tr></thead>
+            <tbody id="cut-rows">
+            {% for cut in cuts %}
+              <tr class="cut-row">
+                <td><input type="number" name="start" min="0" step="0.01" value="{{ cut.start }}" required></td>
+                <td><input type="number" name="end" min="0" step="0.01" value="{{ cut.end if cut.end is not none else '' }}"></td>
+                <td class="cut-detail">
+                  <div class="cut-label">{{ cut.label or 'Unlabelled' }}{% if cut.repeat_group is not none %} <span class="pill info">repeat</span>{% endif %}</div>
+                  <div class="muted cut-duration">{{ (cut.duration | duration) if cut.duration else '' }}</div>
+                  {% if cut.text %}<div class="cut-text muted">{{ cut.text | strip_html(220) }}</div>{% endif %}
+                  {% if cut.excerpt %}
+                  <details class="excerpt">
+                    <summary>Transcript excerpt</summary>
+                    {% for line in cut.excerpt %}
+                    <div class="excerpt-line {{ 'inside' if line.inside else '' }}">
+                      <span class="excerpt-time">{{ line.start | round(1) }}s</span>
+                      <span>{{ line.text }}</span>
+                    </div>
+                    {% endfor %}
+                  </details>
+                  {% endif %}
+                  {% if cut.warnings %}
+                  <div class="cut-warnings">{% for w in cut.warnings %}<span>{{ w }}</span>{% endfor %}</div>
+                  {% endif %}
+                </td>
+                <td><button class="btn ghost small remove-cut" type="button" title="Remove this range">✕</button></td>
+              </tr>
+            {% else %}
+              <tr><td colspan="4" class="empty-cell">No ranges proposed. Add one manually if needed.</td></tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="cut-total">
+          <span>Total removed</span><strong id="cut-total">—</strong>
+        </div>
+        <div class="form-actions">
+          <button class="btn primary" type="submit">Approve &amp; cut</button>
+        </div>
+      </section>
+    </form>
+
+    <section class="card">
+      <div class="card-head"><h2>Other actions</h2></div>
+      <div class="action-grid">
+        <form method="post" action="/podcasts/{{ podcast.slug }}/episodes/{{ episode.id }}/redetect">
+          <button class="btn ghost wide" type="submit" {{ 'disabled' if not has_transcript }}>Re-run detection</button>
+          <small class="muted">Uses the existing transcript and current calibration.</small>
+        </form>
+        <form method="post" action="/podcasts/{{ podcast.slug }}/episodes/{{ episode.id }}/recut">
+          <button class="btn ghost wide" type="submit" {{ 'disabled' if not episode.approved_cuts_json }}>Re-cut approved ranges</button>
+          <small class="muted">Use after a QA failure or if the clean file was deleted.</small>
+        </form>
+        <form method="post" action="/podcasts/{{ podcast.slug }}/episodes/{{ episode.id }}/skip">
+          <button class="btn ghost wide" type="submit">Skip / keep original</button>
+          <small class="muted">The episode stays out of the clean feed.</small>
+        </form>
+      </div>
+    </section>
+  </div>
+</section>
+
+<template id="cut-row-template">
+  <tr class="cut-row">
+    <td><input type="number" name="start" min="0" step="0.01" value="" required></td>
+    <td><input type="number" name="end" min="0" step="0.01" value=""></td>
+    <td class="cut-detail"><div class="cut-label">Manual range</div><div class="muted cut-duration"></div></td>
+    <td><button class="btn ghost small remove-cut" type="button" title="Remove this range">✕</button></td>
+  </tr>
+</template>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if review %}
+<script>
+(function () {
+  const rows = document.getElementById('cut-rows');
+  const template = document.getElementById('cut-row-template');
+  const totalEl = document.getElementById('cut-total');
+  if (!rows) return;
+
+  function recalc() {
+    let total = 0;
+    rows.querySelectorAll('.cut-row').forEach(row => {
+      const s = parseFloat(row.querySelector('input[name="start"]').value);
+      const eInput = row.querySelector('input[name="end"]');
+      const e = eInput.value === '' ? null : parseFloat(eInput.value);
+      const durEl = row.querySelector('.cut-duration');
+      if (!isNaN(s) && e !== null && !isNaN(e) && e > s) {
+        total += e - s;
+        if (durEl) durEl.textContent = fmtDuration(e - s);
+      } else if (!isNaN(s) && e === null) {
+        if (durEl) durEl.textContent = 'to end';
+      } else if (durEl) {
+        durEl.textContent = '';
+      }
+    });
+    if (totalEl) totalEl.textContent = fmtDuration(total);
+  }
+  function fmtDuration(sec) {
+    sec = Math.max(0, Math.round(sec));
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0');
+  }
+  rows.addEventListener('input', recalc);
+  rows.addEventListener('click', e => {
+    if (e.target.closest('.remove-cut')) {
+      const row = e.target.closest('.cut-row');
+      if (row) { row.remove(); recalc(); }
+    }
+  });
+  const add = document.getElementById('add-cut');
+  if (add) add.addEventListener('click', () => {
+    const fragment = template.content.cloneNode(true);
+    rows.appendChild(fragment);
+    const added = rows.querySelector('.cut-row:last-child input[name="start"]');
+    if (added) added.focus();
+    recalc();
+  });
+  recalc();
+})();
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,54 @@
+{% set active = counts.get('queued', 0) + counts.get('running', 0) %}
+<div class="worker-strip">
+  <span class="dot {{ 'ok' if worker.alive else 'bad' }}"></span>
+  <strong>Worker</strong>
+  <span class="muted">{{ worker.state or 'unknown' }}</span>
+  {% if worker.current_job %}
+  <span class="muted">· job #{{ worker.current_job.id }} {{ worker.current_job.type }}</span>
+  {% endif %}
+  <span class="spacer"></span>
+  <span class="muted">{{ counts.get('queued', 0) }} queued · {{ counts.get('running', 0) }} running</span>
+</div>
+
+{% if not tools.ready %}
+<div class="banner warn compact"><div><strong>Toolchain incomplete.</strong> Jobs that need ffmpeg or whisper will fail until it is installed.</div><a class="btn small" href="/settings">Fix</a></div>
+{% endif %}
+
+<div class="table-wrap card flush">
+  <table class="table jobs-table">
+    <thead><tr><th>#</th><th>Type</th><th>Podcast / episode</th><th>State</th><th>Progress</th><th>Attempt</th><th>Updated</th><th></th></tr></thead>
+    <tbody>
+    {% for job in jobs %}
+      <tr>
+        <td><a href="/jobs/{{ job.id }}">{{ job.id }}</a></td>
+        <td><span class="job-type">{{ job.type }}</span></td>
+        <td>
+          <div>{{ job.podcast_title or '—' }}</div>
+          {% if job.episode_title %}<div class="muted clamp-1">{{ job.episode_title }}</div>{% endif %}
+        </td>
+        <td><span class="pill {{ job.state | status_class }}">{{ job.state }}</span></td>
+        <td class="progress-cell">
+          {% if job.progress_total %}
+          <div class="progress small"><span style="width: {{ ((job.progress or 0) / job.progress_total * 100) | round(1) }}%"></span></div>
+          <small class="muted">{{ (job.progress or 0) | human_size }} / {{ job.progress_total | human_size }}</small>
+          {% elif job.state == 'running' %}
+          <span class="spinner"></span>
+          {% else %}—{% endif %}
+        </td>
+        <td class="muted">{{ job.attempts }}/{{ job.max_attempts }}</td>
+        <td class="muted nowrap">{{ (job.finished_at or job.started_at or job.created_at) | fmt_dt('%b %d · %H:%M') }}</td>
+        <td class="actions-col">
+          <a class="btn ghost small" href="/jobs/{{ job.id }}">Log</a>
+          {% if job.state == 'failed' or job.state == 'canceled' %}
+          <form method="post" action="/jobs/{{ job.id }}/retry" class="inline"><button class="btn small" type="submit">Retry</button></form>
+          {% elif job.state == 'queued' %}
+          <form method="post" action="/jobs/{{ job.id }}/cancel" class="inline"><button class="btn ghost small" type="submit">Cancel</button></form>
+          {% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8" class="empty-cell">The queue is empty.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>

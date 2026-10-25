@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Job #{{ job.id }} · Un-Interupted{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="link" href="/queue">← Queue</a>
+    <h1>Job #{{ job.id }} · {{ job.type }}</h1>
+    <p class="muted"><span class="pill {{ job.state | status_class }}">{{ job.state }}</span>
+      {% if podcast %} · <a href="/podcasts/{{ podcast.slug }}">{{ podcast.title }}</a>{% endif %}
+      {% if episode %} · {{ episode.title }}{% endif %}
+    </p>
+  </div>
+  <div class="head-actions">
+    <a class="btn ghost small" href="/jobs/{{ job.id }}">Refresh</a>
+    {% if job.state in ['failed','canceled'] %}
+    <form method="post" action="/jobs/{{ job.id }}/retry" class="inline"><button class="btn small primary" type="submit">Retry job</button></form>
+    {% elif job.state == 'queued' %}
+    <form method="post" action="/jobs/{{ job.id }}/cancel" class="inline"><button class="btn ghost small" type="submit">Cancel</button></form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="two-col">
+  <section class="card">
+    <div class="card-head"><h2>Details</h2></div>
+    <dl class="meta-list">
+      <dt>Type</dt><dd>{{ job.type }}</dd>
+      <dt>State</dt><dd>{{ job.state }}</dd>
+      <dt>Attempts</dt><dd>{{ job.attempts }} / {{ job.max_attempts }}</dd>
+      <dt>Created</dt><dd>{{ job.created_at | fmt_dt }}</dd>
+      <dt>Started</dt><dd>{{ job.started_at | fmt_dt }}</dd>
+      <dt>Finished</dt><dd>{{ job.finished_at | fmt_dt }}</dd>
+      <dt>Run after</dt><dd>{{ job.run_after | fmt_dt }}</dd>
+      {% if job.progress_total %}<dt>Progress</dt><dd>{{ job.progress | human_size }} / {{ job.progress_total | human_size }}</dd>{% endif %}
+      {% if job.log_path %}<dt>Log file</dt><dd class="small-break">{{ job.log_path }}</dd>{% endif %}
+    </dl>
+    {% if job.error %}<div class="inline-err tall">{{ job.error }}</div>{% endif %}
+    {% if job.payload_json and job.payload_json != '{}' %}
+    <details><summary>Payload</summary><pre class="log small">{{ job.payload_json }}</pre></details>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>Context</h2></div>
+    {% if podcast %}
+    <dl class="meta-list">
+      <dt>Podcast</dt><dd><a href="/podcasts/{{ podcast.slug }}">{{ podcast.title }}</a></dd>
+      <dt>Feed</dt><dd class="small-break">{{ podcast.feed_url }}</dd>
+    </dl>
+    {% endif %}
+    {% if episode %}
+    <dl class="meta-list">
+      <dt>Episode</dt><dd>{{ episode.title }}</dd>
+      <dt>Status</dt><dd><span class="pill {{ episode.status | status_class }}">{{ episode.status | status_label }}</span></dd>
+      <dt>Published</dt><dd>{{ episode.published_at | fmt_dt }}</dd>
+      {% if episode.error_message %}<dt>Episode error</dt><dd class="inline-err">{{ episode.error_message }}</dd>{% endif %}
+    </dl>
+    <div class="form-actions">
+      <a class="btn ghost small" href="/podcasts/{{ podcast.slug }}/episodes/{{ episode.id }}/review">Review page</a>
+    </div>
+    {% else %}
+    <p class="muted">No episode attached to this job.</p>
+    {% endif %}
+  </section>
+</div>
+
+<section class="card log-card">
+  <div class="card-head"><h2>Log</h2><span class="muted">last 150 KB</span></div>
+  <pre class="log">{{ log_text or 'No log output yet.' }}</pre>
+</section>
+{% endblock %}

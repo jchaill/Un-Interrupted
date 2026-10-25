@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Import OPML · Un-Interupted{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Import from OPML</h1>
+    <p class="muted">Bring in the subscriptions from Overcast or another podcast app. Nothing is downloaded until you confirm.</p>
+  </div>
+  <a class="btn ghost" href="/podcasts/add">Add one URL</a>
+</div>
+
+<section class="card">
+  <form method="post" action="/podcasts/import" enctype="multipart/form-data" class="stack">
+    <input type="hidden" name="action" value="preview">
+    <label class="field">
+      <span>OPML file</span>
+      <input type="file" name="file" accept=".opml,.xml,text/xml,application/xml">
+    </label>
+    <div class="or"><span>or paste it</span></div>
+    <label class="field">
+      <span>OPML content</span>
+      <textarea name="opml_text" rows="7" spellcheck="false" placeholder="&lt;opml&gt;…&lt;/opml&gt;"></textarea>
+    </label>
+    <div class="form-actions">
+      <button class="btn primary" type="submit">Preview subscriptions</button>
+    </div>
+  </form>
+</section>
+
+{% if parsed %}
+<section class="card">
+  <form method="post" action="/podcasts/import" class="stack">
+    <input type="hidden" name="action" value="import">
+    <div class="card-head">
+      <h2>{{ parsed | length }} feed{{ '' if parsed | length == 1 else 's' }} found</h2>
+      <label class="inline-field">
+        <span>Backfill</span>
+        <select name="backfill">
+          <option value="0" {{ 'selected' if backfill == '0' else '' }}>None</option>
+          <option value="3" {{ 'selected' if (backfill == '3' or not backfill) else '' }}>Latest 3</option>
+          <option value="5" {{ 'selected' if backfill == '5' else '' }}>Latest 5</option>
+          <option value="10" {{ 'selected' if backfill == '10' else '' }}>Latest 10</option>
+        </select>
+      </label>
+    </div>
+    <div class="table-wrap">
+      <table class="table compact">
+        <thead><tr><th class="check-col"></th><th>Podcast</th><th>Feed</th></tr></thead>
+        <tbody>
+        {% for feed in parsed %}
+          <tr>
+            <td class="check-col"><input type="checkbox" name="feed" value="{{ feed.xml_url }}" checked></td>
+            <td><strong>{{ feed.title }}</strong></td>
+            <td class="muted small-break">{{ feed.xml_url }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="form-actions">
+      <button class="btn primary" type="submit">Import selected</button>
+    </div>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

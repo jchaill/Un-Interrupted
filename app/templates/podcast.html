@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}{{ podcast.title }} · Un-Interupted{% endblock %}
+{% block content %}
+<div class="podcast-header">
+  <img class="podcast-art large" src="{{ art_url }}" alt="" loading="lazy">
+  <div class="grow">
+    <div class="eyebrow">Podcast</div>
+    <h1>{{ podcast.title }}</h1>
+    <p class="muted">{{ podcast.author or 'Unknown author' }} · {{ podcast.language or 'auto' }} · {{ podcast.category or 'Uncategorised' }}</p>
+    <div class="feed-line">
+      <code id="feed-url">{{ feed_url }}</code>
+      <button class="btn ghost small copy-btn" type="button" data-copy="{{ feed_url }}">Copy</button>
+      <a class="btn ghost small" href="{{ feed_url }}" target="_blank" rel="noreferrer">Open feed</a>
+    </div>
+  </div>
+  <div class="head-actions">
+    <form method="post" action="/podcasts/{{ podcast.slug }}/poll" class="inline">
+      <button class="btn ghost" type="submit">Check feed now</button>
+    </form>
+    <button class="btn ghost" type="button" onclick="document.getElementById('qr-panel').showModal()">QR code</button>
+  </div>
+</div>
+
+<section class="stats-grid compact-stats">
+  <div class="stat"><span class="stat-label">Published</span><strong>{{ counts.get('published', 0) }}</strong></div>
+  <div class="stat"><span class="stat-label">Awaiting review</span><strong class="{{ 'warn-text' if counts.get('awaiting_review', 0) + counts.get('qa_failed', 0) else '' }}">{{ counts.get('awaiting_review', 0) + counts.get('qa_failed', 0) }}</strong></div>
+  <div class="stat"><span class="stat-label">Failed</span><strong class="{{ 'bad-text' if counts.get('failed', 0) else '' }}">{{ counts.get('failed', 0) }}</strong></div>
+  <div class="stat"><span class="stat-label">Clean audio</span><strong>{{ library_bytes | human_size }}</strong><small>originals {{ original_bytes | human_size }}</small></div>
+  <div class="stat"><span class="stat-label">In feed</span><strong>{{ total_all }}</strong><small>{{ selected_count }} in library</small></div>
+</section>
+
+{% if podcast.last_error %}
+<div class="banner bad"><div><strong>Feed error:</strong> {{ podcast.last_error | strip_html(300) }}</div></div>
+{% endif %}
+
+<details class="card settings-card">
+  <summary><strong>Podcast settings</strong><span class="muted"> · ad calibration, retention, polling</span></summary>
+  <form method="post" action="/podcasts/{{ podcast.slug }}/settings" class="form-grid">
+    <label class="field span-2">
+      <span>Title</span>
+      <input type="text" name="title" value="{{ podcast.title }}" required>
+      <small>The clean feed appends “ (no ads)” to this title.</small>
+    </label>
+    <label class="field span-2">
+      <span>Description</span>
+      <textarea name="description" rows="3">{{ podcast.description or '' }}</textarea>
+    </label>
+    <label class="field">
+      <span>Author</span>
+      <input type="text" name="author" value="{{ podcast.author or '' }}">
+    </label>
+    <label class="field">
+      <span>Language</span>
+      <select name="language">
+        {% for lang in ['auto','fr','en','es','de','it','pt','nl'] %}
+        <option value="{{ lang }}" {{ 'selected' if podcast.language == lang else '' }}>{{ lang }}</option>
+        {% endfor %}
+      </select>
+      <small>Used for transcription. Auto-detect works for mixed libraries.</small>
+    </label>
+    <label class="field">
+      <span>Category</span>
+      <input type="text" name="category" value="{{ podcast.category or '' }}" placeholder="Society &amp; Culture">
+    </label>
+    <label class="field">
+      <span>Poll interval (minutes)</span>
+      <input type="number" name="poll_interval_minutes" min="5" value="{{ podcast.poll_interval_minutes or 30 }}">
+    </label>
+    <label class="field">
+      <span>Keep originals for</span>
+      <select name="retention_days">
+        {% for value in retention_options %}
+        <option value="{{ value }}" {{ 'selected' if retention == value else '' }}>{{ 'Keep forever' if value == '' else ('Delete after publish' if value == '0' else value ~ ' days') }}</option>
+        {% endfor %}
+      </select>
+      <small>Clean episodes are never deleted automatically.</small>
+    </label>
+    <label class="field">
+      <span>Detected-ad language</span>
+      <select name="ad_lang">
+        {% for lang in ['auto','fr','en'] %}
+        <option value="{{ lang }}" {{ 'selected' if podcast.ad_lang == lang else '' }}>{{ lang }}</option>
+        {% endfor %}
+      </select>
+      <small>Set <code>fr</code> to also flag English text inside French shows.</small>
+    </label>
+    <label class="field span-2">
+      <span>Show re-entry / ident regex</span>
+      <input type="text" name="ad_show_stop" value="{{ podcast.ad_show_stop or '' }}" placeholder="(?i)^\s*(le kiki|rtl\b)">
+      <small>Segments matching this are never absorbed into an ad cut.</small>
+    </label>
+    <label class="field span-2">
+      <span>Ad calibration labels (JSON)</span>
+      <textarea name="labels_json" rows="7" spellcheck="false" class="code">{{ labels_json }}</textarea>
+      <small>One <code>["regex", "Sponsor title"]</code> pair per campaign. The detector, QA and review all read this list.</small>
+    </label>
+    <label class="field checkbox-field">
+      <input type="checkbox" name="auto_process" {{ 'checked' if podcast.auto_process else '' }}>
+      <span>Download and process new episodes automatically</span>
+    </label>
+    <label class="field checkbox-field">
+      <input type="checkbox" name="auto_publish" {{ 'checked' if podcast.auto_publish else '' }}>
+      <span>Auto-publish when calibration is confident</span>
+      <small>Requires at least 3 published episodes and no review warnings. Off by default.</small>
+    </label>
+    <div class="span-2 form-actions">
+      <button class="btn primary" type="submit">Save settings</button>
+    </div>
+  </form>
+</details>
+
+<div class="section-head">
+  <h2>Episodes</h2>
+  <div class="tabs">
+    <a href="/podcasts/{{ podcast.slug }}?filter=all" class="{{ 'active' if filter == 'all' else '' }}">All <span>{{ total_all }}</span></a>
+    <a href="/podcasts/{{ podcast.slug }}?filter=selected" class="{{ 'active' if filter == 'selected' else '' }}">In library <span>{{ selected_count }}</span></a>
+    <a href="/podcasts/{{ podcast.slug }}?filter=review" class="{{ 'active' if filter == 'review' else '' }}">Review <span>{{ counts.get('awaiting_review', 0) + counts.get('qa_failed', 0) }}</span></a>
+    <a href="/podcasts/{{ podcast.slug }}?filter=failed" class="{{ 'active' if filter == 'failed' else '' }}">Failed <span>{{ counts.get('failed', 0) }}</span></a>
+    <a href="/podcasts/{{ podcast.slug }}?filter=published" class="{{ 'active' if filter == 'published' else '' }}">Published <span>{{ counts.get('published', 0) }}</span></a>
+  </div>
+</div>
+
+<div class="table-wrap card flush">
+  <table class="table episodes-table">
+    <thead>
+      <tr><th>Date</th><th>Episode</th><th>Duration</th><th>Status</th><th class="actions-col">Actions</th></tr>
+    </thead>
+    <tbody>
+    {% for ep in episodes %}
+      <tr class="{{ 'review-row' if ep.status in ['awaiting_review','qa_failed'] else '' }}">
+        <td class="nowrap muted">{{ ep.published_at | fmt_dt('%b %d, %Y') }}</td>
+        <td>
+          <div class="ep-title">
+            {% if ep._can_review and ep.status != 'published' %}
+            <a href="/podcasts/{{ podcast.slug }}/episodes/{{ ep.id }}/review">{{ ep.title }}</a>
+            {% else %}
+            <span>{{ ep.title }}</span>
+            {% endif %}
+            {% if ep.selected %}<span class="pill muted" title="In library">in library</span>{% endif %}
+          </div>
+          {% if ep.description %}<div class="ep-desc muted">{{ ep.description | strip_html(140) }}</div>{% endif %}
+          {% if ep.error_message %}<div class="inline-err">{{ ep.error_message | strip_html(220) }}</div>{% endif %}
+          {% if ep._latest_job and ep._latest_job.state in ['queued','running'] %}
+          <div class="job-hint"><span class="spinner"></span> {{ ep._latest_job.type }} — {{ ep._latest_job.state }}
+            <a class="link" href="/jobs/{{ ep._latest_job.id }}">log</a>
+          </div>
+          {% endif %}
+        </td>
+        <td class="nowrap muted">{{ (ep.duration_original | duration) if ep.duration_original else '—' }}</td>
+        <td><span class="pill {{ ep.status | status_class }}">{{ ep.status | status_label }}</span></td>
+        <td class="actions-col">
+          {% if ep.status in ['awaiting_review', 'qa_failed'] or (ep.status == 'failed' and ep._can_review) %}
+            <a class="btn small primary" href="/podcasts/{{ podcast.slug }}/episodes/{{ ep.id }}/review">Review</a>
+          {% elif ep.status == 'published' %}
+            <span class="muted small">in clean feed</span>
+          {% elif ep.status in ['discovered','skipped','failed'] %}
+            <form method="post" action="/podcasts/{{ podcast.slug }}/episodes/{{ ep.id }}/process" class="inline">
+              <button class="btn small {{ 'primary' if ep.status == 'discovered' else '' }}" type="submit">{{ 'Download &amp; process' if ep.status == 'discovered' else 'Reprocess' }}</button>
+            </form>
+          {% else %}
+            <span class="muted small">{{ ep.status | status_label }}</span>
+          {% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="empty-cell">No episodes in this view.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if pages > 1 %}
+<div class="pagination">
+  {% if page > 1 %}<a class="btn ghost small" href="?filter={{ filter }}&page={{ page - 1 }}">← Previous</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn ghost small" href="?filter={{ filter }}&page={{ page + 1 }}">Next →</a>{% endif %}
+</div>
+{% endif %}
+
+<dialog id="qr-panel" class="qr-dialog">
+  <div class="qr-inner">
+    <h2>Subscribe in Overcast</h2>
+    <img src="{{ qr_url }}" alt="QR code for {{ podcast.title }} clean feed" class="qr-img">
+    <p class="muted small-break">{{ feed_url }}</p>
+    <div class="form-actions">
+      <button class="btn ghost small copy-btn" type="button" data-copy="{{ feed_url }}">Copy feed URL</button>
+      <button class="btn small" type="button" onclick="document.getElementById('qr-panel').close()">Close</button>
+    </div>
+  </div>
+</dialog>
+{% endblock %}

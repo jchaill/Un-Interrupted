@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>Test Show</title>
+    <link>https://example.com/show</link>
+    <description>A show for tests &amp; demos.</description>
+    <language>en-us</language>
+    <itunes:author>Test Author</itunes:author>
+    <itunes:category text="Comedy"/>
+    <itunes:explicit>false</itunes:explicit>
+    <itunes:image href="https://example.com/art.jpg"/>
+    <item>
+      <title>Episode One</title>
+      <description><![CDATA[<p>First episode &amp; notes.</p>]]></description>
+      <pubDate>Tue, 20 Oct 2026 12:00:00 +0000</pubDate>
+      <guid isPermaLink="false">guid-one</guid>
+      <link>https://example.com/episodes/one</link>
+      <itunes:duration>01:02:03</itunes:duration>
+      <itunes:episode>7</itunes:episode>
+      <itunes:season>2</itunes:season>
+      <enclosure url="https://example.com/audio/one.mp3" length="123456" type="audio/mpeg"/>
+    </item>
+    <item>
+      <title>Episode Two</title>
+      <pubDate>Mon, 19 Oct 2026 12:00:00 +0000</pubDate>
+      <guid isPermaLink="false">guid-two</guid>
+      <enclosure url="https://example.com/audio/two.m4a" length="234567" type="audio/x-m4a"/>
+    </item>
+  </channel>
+</rss>

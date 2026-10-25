@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Add podcast · Un-Interupted{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Add a podcast</h1>
+    <p class="muted">Paste the official RSS feed. The phone only ever subscribes to the clean feed generated here.</p>
+  </div>
+  <a class="btn ghost" href="/podcasts/import">Import OPML</a>
+</div>
+
+<section class="card">
+  <form method="post" action="/podcasts/add" class="feed-form">
+    <input type="hidden" name="action" value="preview">
+    <label class="field grow">
+      <span>Feed URL</span>
+      <input type="url" name="feed_url" value="{{ feed_url }}" placeholder="https://feeds.example.com/show.xml" required autofocus spellcheck="false">
+    </label>
+    <button class="btn primary" type="submit">Preview feed</button>
+  </form>
+</section>
+
+{% if preview %}
+<section class="card preview-card">
+  <div class="preview-head">
+    {% if preview.channel.artwork_url %}
+    <img class="preview-art" src="{{ preview.channel.artwork_url }}" alt="" referrerpolicy="no-referrer">
+    {% else %}
+    <div class="preview-art placeholder">Podcast</div>
+    {% endif %}
+    <div class="grow">
+      <h2>{{ preview.channel.title }}</h2>
+      <p class="muted">{{ preview.channel.author or 'Unknown author' }} · {{ preview.channel.language }} · {{ preview.channel.item_count }} episodes</p>
+      <p class="clamp-3">{{ preview.channel.description | strip_html(420) }}</p>
+      <div class="chips">
+        {% if preview.channel.category %}<span class="chip">{{ preview.channel.category }}</span>{% endif %}
+        {% if preview.channel.explicit %}<span class="chip warn">explicit</span>{% endif %}
+      </div>
+    </div>
+  </div>
+
+  <details class="preview-episodes" open>
+    <summary>Latest episodes</summary>
+    <ol class="episode-list">
+      {% for ep in preview.entries_preview %}
+      <li>
+        <span class="ep-date">{{ ep.published_at | fmt_dt('%b %d, %Y') }}</span>
+        <span class="grow">{{ ep.title }}</span>
+        <span class="muted">{{ (ep.duration | duration) if ep.duration else (ep.enclosure_length | human_size) }}</span>
+      </li>
+      {% endfor %}
+    </ol>
+  </details>
+
+  <form method="post" action="/podcasts/add" class="form-grid confirm-form">
+    <input type="hidden" name="action" value="add">
+    <input type="hidden" name="feed_url" value="{{ feed_url }}">
+    <label class="field span-2">
+      <span>Title in your library</span>
+      <input type="text" name="title" value="{{ preview.channel.title }}" required>
+      <small>The clean feed will be titled “{{ preview.channel.title }} (no ads)”.</small>
+    </label>
+    <label class="field">
+      <span>Backfill</span>
+      <select name="backfill">
+        <option value="0" {{ 'selected' if backfill == '0' else '' }}>None — browse and pick later</option>
+        <option value="3" {{ 'selected' if (backfill == '3' or not backfill) else '' }}>Latest 3 episodes</option>
+        <option value="5" {{ 'selected' if backfill == '5' else '' }}>Latest 5 episodes</option>
+        <option value="10" {{ 'selected' if backfill == '10' else '' }}>Latest 10 episodes</option>
+        <option value="all" {{ 'selected' if backfill == 'all' else '' }}>All episodes (slow)</option>
+      </select>
+      <small>Older episodes stay listed on the podcast page and can be flagged one by one.</small>
+    </label>
+    <label class="field checkbox-field">
+      <input type="checkbox" name="auto_process" checked>
+      <span>Automatically download and process new episodes</span>
+      <small>Ads still wait for review before publishing.</small>
+    </label>
+    <div class="span-2 form-actions">
+      <button class="btn primary" type="submit">Add podcast</button>
+      <a class="btn ghost" href="/podcasts/add">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

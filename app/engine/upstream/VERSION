@@ -1,0 +1,7 @@
+name: ad-remover
+upstream: ~/Documents/Projects/RemoveAdds/ad-remover
+vendored: 2026-10-25
+api: 1
+patch:
+  - scripts/refine.sh now honors WHISPER_LANG (defaults to fr) so QA windows
+    are transcribed in the episode language. Everything else is unchanged.

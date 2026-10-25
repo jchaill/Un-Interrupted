@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% set container_class = "auth-shell" %}
+{% block title %}Set up Un-Interupted{% endblock %}
+{% block content %}
+<section class="auth-card wide">
+  <div class="auth-head">
+    <div class="brand-mark large" aria-hidden="true">
+      <svg viewBox="0 0 32 32" width="40" height="40"><path d="M6 24V8h4v16H6zm6 4V4h4v24h-4zm6-6V10h4v12h-4zm6 3V7h4v17h-4z" fill="currentColor"/></svg>
+    </div>
+    <div>
+      <h1>Un-Interupted</h1>
+      <p class="muted">Your private, ad-free podcast proxy. Everything stays on this Mac.</p>
+    </div>
+  </div>
+
+  <ol class="steps">
+    <li><span class="step-num">1</span> Choose where the podcast library lives.</li>
+    <li><span class="step-num">2</span> Set the address your phone can reach.</li>
+    <li><span class="step-num">3</span> Install the transcription toolchain and Whisper model.</li>
+  </ol>
+
+  <form method="post" action="/setup" class="form-grid">
+    <label class="field span-2">
+      <span>Library folder</span>
+      <input type="text" name="storage_root" value="{{ storage_default }}" required autocomplete="off" spellcheck="false">
+      <small>{{ storage_default }} is the default. You can choose another folder now or move it later in Settings.</small>
+    </label>
+    <label class="field span-2">
+      <span>Base URL for feeds and media</span>
+      <input type="url" name="base_url" value="{{ base_url_default }}" required autocomplete="off" spellcheck="false">
+      <small>Use the Mac's LAN address, e.g. <code>http://192.168.1.20:8090</code>. Set a static DHCP lease so this does not change.</small>
+    </label>
+    <label class="field">
+      <span>Admin password</span>
+      <input type="password" name="password" minlength="8" required autocomplete="new-password">
+    </label>
+    <label class="field">
+      <span>Confirm password</span>
+      <input type="password" name="password2" minlength="8" required autocomplete="new-password">
+    </label>
+    <div class="span-2 callout">
+      <strong>What gets installed</strong>
+      <p>The app installs <code>ffmpeg</code> and <code>whisper.cpp</code> with Homebrew, then downloads the
+      <code>ggml-large-v3-turbo-q5_0</code> model (~547 MB) on first run. The model is not bundled with the app.
+      You can change the model path later.</p>
+    </div>
+    <div class="span-2 form-actions">
+      <button class="btn primary" type="submit">Set up and install</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

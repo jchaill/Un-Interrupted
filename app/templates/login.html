@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% set container_class = "auth-shell" %}
+{% block title %}Sign in · Un-Interupted{% endblock %}
+{% block content %}
+<section class="auth-card">
+  <div class="auth-head">
+    <div class="brand-mark large" aria-hidden="true">
+      <svg viewBox="0 0 32 32" width="40" height="40"><path d="M6 24V8h4v16H6zm6 4V4h4v24h-4zm6-6V10h4v12h-4zm6 3V7h4v17h-4z" fill="currentColor"/></svg>
+    </div>
+    <div>
+      <h1>Sign in</h1>
+      <p class="muted">The admin UI is local. Feeds and audio use private tokens.</p>
+    </div>
+  </div>
+  <form method="post" action="/login" class="stack">
+    <input type="hidden" name="next" value="{{ next or '/' }}">
+    <label class="field">
+      <span>Admin password</span>
+      <input type="password" name="password" required autofocus autocomplete="current-password">
+    </label>
+    <button class="btn primary wide" type="submit">Sign in</button>
+  </form>
+</section>
+{% endblock %}

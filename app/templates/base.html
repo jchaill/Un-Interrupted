@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Un-Interupted{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  {% if is_admin and path not in ['/setup', '/setup/toolchain', '/login'] %}
+  <header class="topbar">
+    <a class="brand" href="/">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="26" height="26"><path d="M6 24V8h4v16H6zm6 4V4h4v24h-4zm6-6V10h4v12h-4zm6 3V7h4v17h-4z" fill="currentColor"/></svg>
+      </span>
+      <span>Un-Interupted</span>
+    </a>
+    <nav class="nav">
+      <a href="/" class="{{ 'active' if path == '/' else '' }}">Dashboard</a>
+      <a href="/podcasts/add" class="{{ 'active' if path.startswith('/podcasts/add') else '' }}">Add podcast</a>
+      <a href="/queue" class="{{ 'active' if path.startswith('/queue') or path.startswith('/jobs') else '' }}">
+        Queue
+        {% set active_jobs = job_counts.get('queued', 0) + job_counts.get('running', 0) %}
+        {% if active_jobs %}<span class="pill info">{{ active_jobs }}</span>{% endif %}
+      </a>
+      <a href="/settings" class="{{ 'active' if path.startswith('/settings') else '' }}">Settings</a>
+    </nav>
+    <div class="top-actions">
+      {% if not tools.ready %}
+      <a class="chip warn" href="/settings" title="Processing toolchain is missing">Toolchain</a>
+      {% endif %}
+      {% if not worker.alive %}
+      <span class="chip bad" title="Worker heartbeat is stale">Worker offline</span>
+      {% endif %}
+      <form method="post" action="/logout" class="inline">
+        <button class="btn ghost small" type="submit">Sign out</button>
+      </form>
+    </div>
+  </header>
+  {% endif %}
+
+  <main class="{% block container_class %}container{% endblock %}">
+    {% if msg %}<div class="flash ok" role="status">{{ msg }}</div>{% endif %}
+    {% if err %}<div class="flash bad" role="alert">{{ err }}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    <span>Un-Interupted {{ version }}</span>
+    <span>Private, ad-free podcast proxy</span>
+  </footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

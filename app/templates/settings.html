@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Settings · Un-Interupted{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Settings</h1>
+    <p class="muted">Toolchain, storage, network address and admin access.</p>
+  </div>
+</div>
+
+<section class="card">
+  <div class="card-head">
+    <h2>Processing toolchain</h2>
+    <div class="head-actions">
+      <form method="post" action="/settings/toolchain/install" class="inline"><button class="btn small primary" type="submit" {{ 'disabled' if toolchain.state.running }}>Install / retry</button></form>
+      <form method="post" action="/settings/toolchain/recheck" class="inline"><button class="btn ghost small" type="submit">Recheck</button></form>
+    </div>
+  </div>
+  <div class="toolchain-grid">
+    <div class="tool-row">
+      <span class="dot {{ 'ok' if toolchain.tools.ffmpeg and toolchain.tools.ffprobe else 'muted' }}"></span>
+      <div><strong>ffmpeg + ffprobe</strong><small class="muted">{{ toolchain.tools.ffmpeg or 'not found' }}</small></div>
+      <span class="tool-status">{{ 'installed' if toolchain.tools.ffmpeg and toolchain.tools.ffprobe else 'missing' }}</span>
+    </div>
+    <div class="tool-row">
+      <span class="dot {{ 'ok' if toolchain.tools.whisper_cli else 'muted' }}"></span>
+      <div><strong>whisper.cpp</strong><small class="muted">{{ toolchain.tools.whisper_cli or 'not found' }}</small></div>
+      <span class="tool-status">{{ 'installed' if toolchain.tools.whisper_cli else 'missing' }}</span>
+    </div>
+    <div class="tool-row">
+      <span class="dot {{ 'ok' if toolchain.tools.model else 'muted' }}"></span>
+      <div><strong>Whisper turbo model</strong><small class="muted small-break">{{ toolchain.tools.model_path }}</small></div>
+      <span class="tool-status">{{ (toolchain.tools.model_size | human_size) if toolchain.tools.model else 'missing' }}</span>
+    </div>
+    <div class="tool-row">
+      <span class="dot {{ 'ok' if not toolchain.tools.missing_scripts else 'muted' }}"></span>
+      <div><strong>Ad-removal engine</strong><small class="muted">{{ toolchain.tools.engine_version }}</small></div>
+      <span class="tool-status">{{ 'ready' if not toolchain.tools.missing_scripts else 'missing scripts' }}</span>
+    </div>
+  </div>
+  {% if toolchain.state.running %}
+  <div class="status-line"><span class="spinner"></span> {{ toolchain.state.message }}</div>
+  {% if toolchain.state.total %}
+  <div class="progress"><span style="width: {{ ((toolchain.state.downloaded or 0) / toolchain.state.total * 100) | round(1) }}%"></span></div>
+  {% endif %}
+  {% elif toolchain.state.error %}
+  <div class="flash bad">{{ toolchain.state.error }}</div>
+  {% endif %}
+  <details class="log-card">
+    <summary>Install log</summary>
+    <pre class="log">{{ toolchain.log_tail or 'No log yet.' }}</pre>
+  </details>
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>Network &amp; defaults</h2></div>
+  <form method="post" action="/settings/general" class="form-grid">
+    <label class="field span-2">
+      <span>Base URL</span>
+      <input type="url" name="base_url" value="{{ base_url }}" required>
+      <small>This is written into generated feed and media URLs. If it changes, re-copy the feed URL in Overcast.</small>
+    </label>
+    <label class="field">
+      <span>Port</span>
+      <input type="number" name="port" min="1024" max="65535" value="{{ cfg.port or 8090 }}">
+      <small>Needs an app restart.</small>
+    </label>
+    <label class="field">
+      <span>Disk reserve (GB)</span>
+      <input type="number" name="min_free_gb" min="1" value="{{ cfg.min_free_gb or 5 }}">
+      <small>Downloads pause below this free space.</small>
+    </label>
+    <label class="field">
+      <span>Default original retention</span>
+      <select name="default_retention_days">
+        {% for value in ['', '0', '7', '14', '30', '60', '90', '180', '365'] %}
+        <option value="{{ value }}" {{ 'selected' if (cfg.default_retention_days | string) == value or (cfg.default_retention_days is none and value == '') else '' }}>{{ 'Keep forever' if value == '' else ('Delete after publish' if value == '0' else value ~ ' days') }}</option>
+        {% endfor %}
+      </select>
+      <small>Used for newly added podcasts. Each podcast can override it.</small>
+    </label>
+    <div class="span-2 form-actions">
+      <button class="btn primary" type="submit">Save</button>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>Storage</h2>
+    {% if relocate_pending %}<span class="pill warn">move in progress</span>{% endif %}
+  </div>
+  <dl class="meta-list">
+    <dt>Library folder</dt><dd class="small-break">{{ storage_root }}</dd>
+    <dt>App support</dt><dd class="small-break">{{ app_home }}</dd>
+    <dt>Clean + original audio</dt><dd>{{ library_bytes | human_size }}</dd>
+    <dt>Podcasts</dt><dd>{{ podcast_count }}</dd>
+    {% if disk %}<dt>Disk</dt><dd>{{ disk.free | human_size }} free of {{ disk.total | human_size }}</dd>{% endif %}
+  </dl>
+  <form method="post" action="/settings/storage" class="form-grid">
+    <label class="field span-2">
+      <span>Move library to a new folder</span>
+      <input type="text" name="storage_root" placeholder="/Volumes/Podcasts/Un-Interupted" autocomplete="off" spellcheck="false">
+      <small>The worker copies the whole <code>podcasts/</code> tree, then switches the app to the new folder. The old folder is kept unless you tick the box.</small>
+    </label>
+    <label class="field checkbox-field span-2">
+      <input type="checkbox" name="delete_old">
+      <span>Delete the old library folder after a successful copy</span>
+    </label>
+    <div class="span-2 form-actions">
+      <button class="btn" type="submit" {{ 'disabled' if relocate_pending }}>Move library</button>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>Security</h2></div>
+  <form method="post" action="/settings/password" class="form-grid">
+    <label class="field span-2">
+      <span>Current password</span>
+      <input type="password" name="current_password" required autocomplete="current-password">
+    </label>
+    <label class="field">
+      <span>New password</span>
+      <input type="password" name="new_password" minlength="8" required autocomplete="new-password">
+    </label>
+    <label class="field">
+      <span>Confirm new password</span>
+      <input type="password" name="confirm_password" minlength="8" required autocomplete="new-password">
+    </label>
+    <div class="span-2 form-actions">
+      <button class="btn" type="submit">Change password</button>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>About</h2></div>
+  <dl class="meta-list">
+    <dt>App version</dt><dd>{{ version }}</dd>
+    <dt>Ad engine</dt><dd>{{ toolchain.tools.engine_version }}</dd>
+    <dt>App support</dt><dd class="small-break">{{ app_home }}</dd>
+    <dt>Database</dt><dd class="small-break">{{ app_home }}/db.sqlite3</dd>
+    <dt>Worker</dt><dd>{{ worker.state }}{% if worker.last_seen %} · {{ worker.last_seen | fmt_dt }}{% endif %}</dd>
+  </dl>
+  <p class="muted small">Feeds are private: each podcast has its own token. Do not expose the admin UI or feed URLs publicly.</p>
+</section>
+{% endblock %}

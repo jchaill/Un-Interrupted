@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% set container_class = "container narrow" %}
+{% block title %}Toolchain · Un-Interupted{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Processing toolchain</h1>
+    <p class="muted">Ad removal needs ffmpeg, whisper.cpp and the Whisper turbo model. The app installs them once.</p>
+  </div>
+  <a class="btn ghost" href="/">Skip to dashboard</a>
+</div>
+
+<section class="card" id="toolchain-card"
+         data-ready="{{ '1' if toolchain.tools.ready else '0' }}"
+         data-running="{{ '1' if toolchain.state.running else '0' }}">
+  <div class="toolchain-grid">
+    <div class="tool-row" data-check="ffmpeg">
+      <span class="dot {{ 'ok' if toolchain.tools.ffmpeg and toolchain.tools.ffprobe else 'muted' }}"></span>
+      <div><strong>ffmpeg + ffprobe</strong><small class="muted">Audio probing, cutting and verification</small></div>
+      <span class="tool-status">{{ 'installed' if toolchain.tools.ffmpeg and toolchain.tools.ffprobe else 'missing' }}</span>
+    </div>
+    <div class="tool-row" data-check="whisper">
+      <span class="dot {{ 'ok' if toolchain.tools.whisper_cli else 'muted' }}"></span>
+      <div><strong>whisper.cpp</strong><small class="muted">Local speech-to-text (Metal accelerated)</small></div>
+      <span class="tool-status">{{ 'installed' if toolchain.tools.whisper_cli else 'missing' }}</span>
+    </div>
+    <div class="tool-row" data-check="model">
+      <span class="dot {{ 'ok' if toolchain.tools.model else 'muted' }}"></span>
+      <div><strong>Whisper turbo model</strong><small class="muted">{{ toolchain.tools.model_path }}</small></div>
+      <span class="tool-status">{{ toolchain.tools.model_size | human_size if toolchain.tools.model else 'missing' }}</span>
+    </div>
+    <div class="tool-row" data-check="engine">
+      <span class="dot {{ 'ok' if not toolchain.tools.missing_scripts else 'muted' }}"></span>
+      <div><strong>Ad-removal engine</strong><small class="muted">{{ toolchain.tools.engine_version }} · {{ toolchain.tools.scripts_dir }}</small></div>
+      <span class="tool-status">{{ 'ready' if not toolchain.tools.missing_scripts else 'missing scripts' }}</span>
+    </div>
+  </div>
+
+  <div class="status-panel" id="toolchain-state">
+    {% if toolchain.state.error %}
+      <div class="flash bad">{{ toolchain.state.error }}</div>
+    {% elif toolchain.tools.ready %}
+      <div class="flash ok">Everything is ready. You can start adding podcasts.</div>
+    {% else %}
+      <div class="muted">{{ toolchain.state.message or 'Waiting to start…' }}</div>
+    {% endif %}
+    {% if toolchain.state.total %}
+    <div class="progress"><span style="width: {{ ((toolchain.state.downloaded or 0) / toolchain.state.total * 100) | round(1) }}%"></span></div>
+    <small class="muted">{{ (toolchain.state.downloaded or 0) | human_size }} of {{ toolchain.state.total | human_size }}</small>
+    {% endif %}
+  </div>
+
+  <div class="form-actions">
+    <form method="post" action="/setup/toolchain/install" class="inline">
+      <button class="btn primary" type="submit" id="install-btn" {{ 'disabled' if toolchain.state.running }}>Install / retry</button>
+    </form>
+    <form method="post" action="/setup/toolchain/recheck" class="inline">
+      <button class="btn ghost" type="submit">Recheck</button>
+    </form>
+    <a class="btn {{ 'primary' if toolchain.tools.ready else 'ghost' }}" href="/" id="continue-btn">Continue to dashboard</a>
+  </div>
+</section>
+
+<details class="card log-card" {% if not toolchain.tools.ready %}open{% endif %}>
+  <summary>Install log</summary>
+  <pre class="log" id="toolchain-log">{{ toolchain.log_tail or 'No log yet.' }}</pre>
+</details>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const card = document.getElementById('toolchain-card');
+  const state = document.getElementById('toolchain-state');
+  const log = document.getElementById('toolchain-log');
+  const installBtn = document.getElementById('install-btn');
+  if (!card) return;
+
+  async function poll() {
+    try {
+      const res = await fetch('/setup/toolchain/status', {headers: {'Accept': 'application/json'}});
+      if (!res.ok) return;
+      const data = await res.json();
+      const t = data.tools || {};
+      const s = data.state || {};
+      const ready = !!t.ready;
+      card.dataset.ready = ready ? '1' : '0';
+      card.dataset.running = s.running ? '1' : '0';
+      if (installBtn) installBtn.disabled = !!s.running;
+
+      const rows = {
+        ffmpeg: !!(t.ffmpeg && t.ffprobe),
+        whisper: !!t.whisper_cli,
+        model: !!t.model,
+        engine: !(t.missing_scripts || []).length
+      };
+      document.querySelectorAll('.tool-row').forEach(row => {
+        const key = row.dataset.check;
+        const ok = !!rows[key];
+        const dot = row.querySelector('.dot');
+        if (dot) dot.className = 'dot ' + (ok ? 'ok' : 'muted');
+        const status = row.querySelector('.tool-status');
+        if (status) {
+          if (key === 'model') status.textContent = ok ? 'ready' : 'missing';
+          else status.textContent = ok ? (key === 'engine' ? 'ready' : 'installed') : 'missing';
+        }
+      });
+
+      let html = '';
+      if (s.error) {
+        html += '<div class="flash bad">' + escapeHtml(s.error) + '</div>';
+      } else if (ready) {
+        html += '<div class="flash ok">Everything is ready. You can start adding podcasts.</div>';
+      } else {
+        html += '<div class="muted">' + escapeHtml(s.message || 'Waiting to start…') + '</div>';
+      }
+      if (s.total) {
+        const pct = Math.max(0, Math.min(100, (s.downloaded || 0) / s.total * 100));
+        html += '<div class="progress"><span style="width:' + pct.toFixed(1) + '%"></span></div>';
+        html += '<small class="muted">' + fmtBytes(s.downloaded || 0) + ' of ' + fmtBytes(s.total) + '</small>';
+      }
+      state.innerHTML = html;
+      if (data.log_tail) {
+        log.textContent = data.log_tail;
+        log.scrollTop = log.scrollHeight;
+      }
+      if (ready) {
+        const cont = document.getElementById('continue-btn');
+        if (cont) cont.classList.add('primary');
+      }
+    } catch (e) {}
+  }
+
+  function fmtBytes(n) {
+    if (!n) return '0 B';
+    const units = ['B','KB','MB','GB'];
+    let i = 0, v = n;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return v.toFixed(i ? 1 : 0) + ' ' + units[i];
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  poll();
+  setInterval(poll, 2000);
+})();
+</script>
+{% endblock %}

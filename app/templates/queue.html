@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Queue · Un-Interupted{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Queue</h1>
+    <p class="muted">One heavy job runs at a time. Transcription is usually the long step.</p>
+  </div>
+  <div class="head-actions">
+    <a class="btn ghost" href="/podcasts/add">Add podcast</a>
+  </div>
+</div>
+
+<div id="queue-live" hx-get="/queue/partial" hx-trigger="every 5s" hx-swap="innerHTML">
+  {% include "partials/queue_table.html" %}
+</div>
+{% endblock %}
