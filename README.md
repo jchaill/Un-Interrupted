@@ -63,13 +63,21 @@ sudo xcodebuild -license accept
 3. Start the app:
 
    ```bash
-   ./scripts/run.sh
+   ./scripts/start.sh
    ```
 
    Or double-click **`Un-Interupted.command`** in Finder. (If Gatekeeper blocks
-   it, right-click → Open.)
+   it, right-click → Open.) The launcher starts the server in the background,
+   waits for it to answer, and opens <http://localhost:8090>. You can close the
+   Terminal window afterwards; the server keeps running.
 
-4. Open <http://localhost:8090>.
+   The first run may spend a few minutes at **“Installing Python dependencies”**.
+   Leave that window open until it says **Running**.
+
+   To stop it later, double-click **`Stop Un-Interupted.command`** or run
+   `./scripts/stop.sh`.
+
+4. Open <http://localhost:8090> if the browser did not open automatically.
 
 5. First-run setup:
    - choose a storage folder (default `~/Podcasts/Un-Interupted`),
@@ -278,6 +286,8 @@ upgrade procedure.
 
 See [docs/troubleshooting.md](docs/troubleshooting.md) for:
 
+- double-click / background server issues
+- first-run dependency or model download problems
 - Xcode license / Homebrew failures
 - model download interruptions
 - "worker not running"

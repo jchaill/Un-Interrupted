@@ -52,9 +52,21 @@ if [ ! -x ".venv/bin/python" ]; then
   "$PYTHON" -m venv .venv
 fi
 
-echo "Installing Python dependencies..."
-.venv/bin/python -m pip install --disable-pip-version-check --upgrade pip setuptools wheel >/dev/null
-.venv/bin/python -m pip install --disable-pip-version-check -r requirements.txt
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+export PIP_NO_INPUT=1
+
+echo "Preparing pip (first run only)…"
+.venv/bin/python -m pip install --quiet --upgrade pip setuptools wheel
+
+echo "Installing Python dependencies (first run only; can take a few minutes)…"
+if ! .venv/bin/python -m pip install --progress-bar on --timeout 60 --retries 3 -r requirements.txt; then
+  cat >&2 <<'MSG'
+
+Dependency installation failed. Check your network connection and retry.
+If you are behind a proxy, set HTTPS_PROXY before running this script.
+MSG
+  exit 1
+fi
 
 touch .venv/.bootstrap-ok
 echo "Bootstrap complete."

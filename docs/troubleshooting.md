@@ -1,5 +1,58 @@
 # Troubleshooting
 
+## Launcher / “localhost:8090 is not available”
+
+The double-click launcher now starts the server **in the background** and waits
+until `/health` answers. If it reports success, you can close the Terminal
+window.
+
+If it fails, it prints the last lines of the log. The full log is:
+
+```bash
+tail -80 "$HOME/Library/Logs/Un-Interupted.log"
+```
+
+Check whether the server is actually listening:
+
+```bash
+curl -s http://127.0.0.1:8090/health
+lsof -nP -iTCP:8090 -sTCP:LISTEN
+```
+
+If nothing is listening, start it from Terminal so errors stay visible:
+
+```bash
+./scripts/start.sh
+```
+
+Stop it with:
+
+```bash
+./scripts/stop.sh
+```
+
+or double-click **`Stop Un-Interupted.command`**.
+
+### It looked stuck at “Installing Python dependencies”
+
+That is the one-time bootstrap: Homebrew Python 3.12 + pip packages. It can take
+a few minutes on a slow connection. Leave the window open. If it fails, the
+script now prints the error; check the network/proxy and retry.
+
+### “Port 8090 is used by PID … which does not look like Un-Interupted”
+
+Something else owns the port. Find it with `lsof -nP -iTCP:8090` and either stop
+it or choose another port via Settings / `UNINTERUPTED_PORT`.
+
+### It keeps restarting after `scripts/stop.sh`
+
+You installed the launchd autostart agent (`scripts/install-launchd.sh`), which
+uses `KeepAlive`. Remove it first:
+
+```bash
+./scripts/uninstall-launchd.sh
+```
+
 ## First run / toolchain
 
 ### `brew install` fails with an Xcode license error
