@@ -51,6 +51,7 @@ def test_review_without_cuts_is_never_confident(tmp_path):
     review = build_review(path, [], labels_json="[]", total_duration=5.0)
     assert review["confidence"] == 0.0
     assert review["n_cuts"] == 0
+    assert review["no_ads"] is True
     assert review["warnings"]
 
 

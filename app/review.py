@@ -237,8 +237,8 @@ def build_review(
         )
     if not normalized_cuts:
         warnings.append(
-            "No ad blocks were detected. Listen to the episode or inspect the transcript; "
-            "you can add cut ranges manually or skip it."
+            "No ad blocks were detected. You can approve and publish the original "
+            "audio unchanged, add cut ranges manually, or skip it."
         )
     if ratio > 0.25:
         warnings.append(f"Removing {ratio * 100:.1f}% of the episode is unusually large; check the ranges.")
@@ -299,6 +299,7 @@ def build_review(
         "removed_seconds": round(removed, 2),
         "ratio": round(ratio, 4),
         "n_cuts": len(normalized_cuts),
+        "no_ads": not normalized_cuts,
         "labels_hit": labels_hit,
         "repeated_blocks": repeat_count,
         "llm_supported": llm_supported,

@@ -398,8 +398,24 @@ def _maybe_auto_publish(
     review: dict[str, Any],
     log: Path,
 ) -> bool:
-    if not podcast.get("auto_publish") or not cuts:
+    if not podcast.get("auto_publish"):
         return False
+    if not cuts:
+        # Nothing to cut: publish the original bytes unchanged. Still refuse
+        # when the LLM pass failed, because then "no ads" is not trustworthy.
+        if (review.get("llm") or {}).get("error"):
+            _write_log(log, "Auto-publish skipped: no cuts, but LLM detection failed.")
+            return False
+        db.update_episode(
+            episode_id,
+            cuts_json="[]",
+            approved_cuts_json="[]",
+            status="approved",
+            error_message=None,
+        )
+        db.enqueue_job("cut", podcast_id=podcast["id"], episode_id=episode_id, priority=85)
+        _write_log(log, "Auto-publish approved a no-ad episode; original audio will be copied unchanged.")
+        return True
     if review.get("warnings") or float(review.get("confidence") or 0) < 0.80:
         return False
     if review.get("llm_only"):
@@ -437,6 +453,13 @@ def _normalized_cuts(episode: dict[str, Any]) -> list[list[float | None]]:
     return cuts
 
 
+def _copy_as_clean(source: Path, clean: Path, log: Path) -> None:
+    clean.parent.mkdir(parents=True, exist_ok=True)
+    clean.unlink(missing_ok=True)
+    shutil.copy2(source, clean)
+    _write_log(log, f"No ad cuts; copied original to {clean.name} unchanged.")
+
+
 def handle_cut(job: dict[str, Any], log: Path) -> None:
     episode = _require_episode(job.get("episode_id"))
     podcast = _require_podcast(episode["podcast_id"])
@@ -448,7 +471,25 @@ def handle_cut(job: dict[str, Any], log: Path) -> None:
         raise JobFatal("Original audio is missing", episode_status="failed")
     cuts = _normalized_cuts(episode)
     if not cuts:
-        raise JobFatal("No approved cut ranges", episode_status="awaiting_review")
+        _set_status(episode["id"], "cutting")
+        paths["cuts"].write_text("[]", encoding="utf-8")
+        _copy_as_clean(source, paths["clean"], log)
+        duration = probe_duration(paths["clean"]) or episode.get("duration_original")
+        db.update_episode(
+            episode["id"],
+            clean_duration=duration,
+            clean_size=paths["clean"].stat().st_size,
+            clean_filename=clean_filename_for(episode),
+            status="ready_publish",
+            error_message=None,
+        )
+        db.enqueue_job(
+            "publish",
+            podcast_id=podcast["id"],
+            episode_id=episode["id"],
+            priority=80,
+        )
+        return
 
     paths["cuts"].write_text(json.dumps(cuts, ensure_ascii=False), encoding="utf-8")
     try:

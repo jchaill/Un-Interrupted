@@ -193,13 +193,17 @@ is kept for RSS ordering and display.
 
 ### Auto-publish gate
 
-Auto-publish is off by default. When enabled for a podcast, an episode can skip
-review only if:
+Auto-publish is off by default. When enabled for a podcast, an episode with cuts
+can skip review only if:
 
 - the podcast already has at least 3 published episodes,
 - the review has no warnings,
 - confidence is at least 0.80,
 - and QA passes.
+
+A no-ad episode is approved and published as-is immediately, because there is
+nothing to cut or QA. The exception is a failed LLM pass: “no ads” is not
+trusted then, so the episode stays in review.
 
 Otherwise it stays in `awaiting_review`.
 
@@ -321,7 +325,7 @@ access and roughly 1 GB of free space.
 
 ## 11. Testing
 
-`tests/` (35 tests, no ffmpeg/whisper required):
+`tests/` (39 tests, no ffmpeg/whisper required):
 
 - slug/filename/duration/safe-join helpers
 - RSS/OPML parsing (including real-world fixture shape)

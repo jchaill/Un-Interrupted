@@ -101,6 +101,9 @@
           <h2>Cut ranges</h2>
           <button class="btn ghost small" type="button" id="add-cut">+ Add range</button>
         </div>
+        {% if review.n_cuts == 0 %}
+        <div class="flash ok"><strong>No ads detected.</strong> Approving will publish the original audio unchanged; no cuts will be made.</div>
+        {% endif %}
         <p class="muted small">Times are in seconds. Leave the end blank to cut to the end of the episode.</p>
         <div class="table-wrap">
           <table class="table cut-table">
@@ -142,7 +145,7 @@
           <span>Total removed</span><strong id="cut-total">—</strong>
         </div>
         <div class="form-actions">
-          <button class="btn primary" type="submit">Approve &amp; cut</button>
+          <button class="btn primary" type="submit">{{ 'Approve & publish as-is' if review.n_cuts == 0 else 'Approve & cut' }}</button>
         </div>
       </section>
     </form>

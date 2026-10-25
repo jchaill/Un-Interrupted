@@ -119,9 +119,13 @@ private feed updates; Downcast sees the clean episode
 ```
 
 - **Review first** is the default. Nothing is published until you approve it.
-- **Auto-publish** is opt-in per podcast and only fires when the show has at
-  least 3 published episodes, the review has no warnings, confidence is ≥ 0.80,
-  and QA passes.
+- **No ads detected:** the review button becomes **Approve & publish as-is**.
+  The original audio is copied unchanged into the clean feed; there is nothing
+  to cut or QA.
+- **Auto-publish** is opt-in per podcast. With cuts, it only fires when the show
+  has at least 3 published episodes, the review has no warnings, confidence is
+  ≥ 0.80, and QA passes. A no-ad episode is auto-published as-is even before
+  that threshold, unless the LLM pass failed.
 - **Skip** keeps the episode out of the clean feed (the original stays until
   retention deletes it).
 - **Re-detect** re-runs detection on the existing transcript (fast).

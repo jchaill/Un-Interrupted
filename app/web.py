@@ -825,10 +825,11 @@ async def review_approve(request: Request, slug: str, episode_id: int):
                 err="Each cut must end after it starts.",
             )
         cuts.append([round(start, 2), round(end, 2) if end is not None else None])
-    if not cuts:
+    transcript = config.episode_dirs(cfg, slug)["work"] / f"tr_{pipeline.episode_tag(episode)}.json"
+    if not cuts and not episode.get("review_json") and not transcript.is_file():
         return _redirect(
             f"/podcasts/{slug}/episodes/{episode_id}/review",
-            err="Add at least one cut range, or skip the episode.",
+            err="Run detection first, or add at least one cut range.",
         )
     cuts.sort(key=lambda c: c[0])
     try:
@@ -836,7 +837,7 @@ async def review_approve(request: Request, slug: str, episode_id: int):
     except json.JSONDecodeError:
         llm_result = None
     review = build_review(
-        config.episode_dirs(cfg, slug)["work"] / f"tr_{pipeline.episode_tag(episode)}.json",
+        transcript,
         cuts,
         labels_json=podcast.get("labels_json"),
         total_duration=total,
@@ -852,7 +853,12 @@ async def review_approve(request: Request, slug: str, episode_id: int):
         error_message=None,
     )
     db.enqueue_job("cut", podcast_id=podcast["id"], episode_id=episode_id, priority=85)
-    return _redirect(f"/podcasts/{slug}?filter=review", msg="Cut approved and queued.")
+    message = (
+        "Episode approved; the original audio will be published unchanged because no ads were cut."
+        if not cuts
+        else "Cut approved and queued."
+    )
+    return _redirect(f"/podcasts/{slug}?filter=review", msg=message)
 
 
 @app.post("/podcasts/{slug}/episodes/{episode_id}/skip")

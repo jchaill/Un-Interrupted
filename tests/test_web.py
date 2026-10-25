@@ -171,6 +171,77 @@ def test_podcast_and_review_pages_render(app_env):
     assert response.headers["location"].startswith(f"/podcasts/{podcast['slug']}?filter=review")
 
 
+def test_approve_without_cuts_queues_original_as_clean(app_env):
+    cfg = config.load_config()
+    podcast = db.create_podcast(
+        {
+            "title": "No Ads Show",
+            "feed_url": "https://example.com/no-ads.xml",
+            "language": "en",
+            "labels_json": "[]",
+            "feed_token": "no-ads-token",
+            "last_polled_at": db.now_iso(),
+        }
+    )
+    episode, _ = db.upsert_feed_episode(
+        podcast["id"],
+        {
+            "guid": "no-ads-guid",
+            "title": "An episode without ads",
+            "description": "Description",
+            "published_at": "2026-10-21T12:00:00+00:00",
+            "original_url": "https://example.com/no-ads.mp3",
+            "enclosure_type": "audio/mpeg",
+            "duration": 30.0,
+            "item_json": {},
+        },
+    )
+    dirs = config.ensure_episode_dirs(cfg, podcast["slug"])
+    original = dirs["originals"] / "no-ads.mp3"
+    original.write_bytes(b"ID3" + b"a" * 1000)
+    transcript = dirs["work"] / f"tr_ep{episode['id']}.json"
+    transcript.write_text(
+        json.dumps(
+            {
+                "transcription": [
+                    {"offsets": {"from": 0, "to": 6000}, "text": "Welcome to the show."},
+                    {"offsets": {"from": 6000, "to": 18000}, "text": "Here is the interview."},
+                    {"offsets": {"from": 18000, "to": 30000}, "text": "Thanks for listening."},
+                ]
+            }
+        )
+    )
+    review_data = review.build_review(
+        transcript,
+        [],
+        labels_json="[]",
+        total_duration=30.0,
+    )
+    db.update_episode(
+        episode["id"],
+        status="awaiting_review",
+        original_path=config.rel_to_storage(cfg, original),
+        duration_original=30.0,
+        cuts_json="[]",
+        review_json=json.dumps(review_data),
+        confidence=review_data["confidence"],
+    )
+    client = _client(app_env)
+    response = client.post(
+        f"/podcasts/{podcast['slug']}/episodes/{episode['id']}/approve",
+        data={},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"].startswith(f"/podcasts/{podcast['slug']}?filter=review")
+    saved = db.get_episode(episode["id"])
+    assert saved["status"] == "approved"
+    assert json.loads(saved["approved_cuts_json"]) == []
+    job = db.latest_job_for_episode(episode["id"], "cut")
+    assert job is not None
+    assert job["state"] == "queued"
+
+
 def test_media_range_and_token(app_env):
     cfg = config.load_config()
     podcast = db.create_podcast(
