@@ -162,6 +162,13 @@ def test_podcast_and_review_pages_render(app_env):
     assert "Cut ranges" in response.text
     assert "Acme" in response.text
     assert "LLM 91%" in response.text
+    response = client.post(
+        f"/podcasts/{podcast['slug']}/episodes/{episode['id']}/approve",
+        data={"start": "3", "end": "9"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"].startswith(f"/podcasts/{podcast['slug']}?filter=review")
 
 
 def test_media_range_and_token(app_env):

@@ -852,7 +852,7 @@ async def review_approve(request: Request, slug: str, episode_id: int):
         error_message=None,
     )
     db.enqueue_job("cut", podcast_id=podcast["id"], episode_id=episode_id, priority=85)
-    return _redirect(f"/podcasts/{slug}", msg="Cut approved and queued.")
+    return _redirect(f"/podcasts/{slug}?filter=review", msg="Cut approved and queued.")
 
 
 @app.post("/podcasts/{slug}/episodes/{episode_id}/skip")
