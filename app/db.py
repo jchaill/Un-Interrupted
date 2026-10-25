@@ -373,13 +373,17 @@ def list_episodes(
     podcast_id: int,
     *,
     status: str | None = None,
+    statuses: tuple[str, ...] | None = None,
     selected_only: bool = False,
     limit: int = 200,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
     where = ["podcast_id=?"]
     params: list[Any] = [podcast_id]
-    if status:
+    if statuses:
+        where.append("status IN (" + ",".join("?" for _ in statuses) + ")")
+        params.extend(statuses)
+    elif status:
         where.append("status=?")
         params.append(status)
     if selected_only:
@@ -399,11 +403,18 @@ def list_episodes(
 
 
 def count_episodes(
-    podcast_id: int, *, status: str | None = None, selected_only: bool = False
+    podcast_id: int,
+    *,
+    status: str | None = None,
+    statuses: tuple[str, ...] | None = None,
+    selected_only: bool = False,
 ) -> int:
     where = ["podcast_id=?"]
     params: list[Any] = [podcast_id]
-    if status:
+    if statuses:
+        where.append("status IN (" + ",".join("?" for _ in statuses) + ")")
+        params.extend(statuses)
+    elif status:
         where.append("status=?")
         params.append(status)
     if selected_only:

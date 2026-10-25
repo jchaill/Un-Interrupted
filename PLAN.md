@@ -1,615 +1,344 @@
 # Un-Interupted — Product & Build Plan
 
-> Status: **planning / awaiting answers** (see [Clarifying questions](#12-clarifying-questions)).
-> No application code has been written yet.
+> Status: **working MVP implemented** (Phases 0–2 and most of Phase 3).
+> The full pipeline has been run end-to-end on this Mac: local RSS feed →
+> download → Whisper transcription → cut detection → review → approval →
+> cut → QA → published feed → HTTP Range playback.
+>
+> Remaining before calling it v1: first-run model download on a clean machine,
+> a couple of real feeds subscribed in Overcast, and per-show calibration.
 
 ---
 
 ## 1. What it does
 
-Un-Interupted is a self-hosted web app that:
+Un-Interupted is a private, self-hosted podcast proxy for macOS:
 
-1. Lets you add official podcast RSS feed URLs.
-2. Polls those feeds and downloads new episodes automatically.
-3. Runs the existing **ad-remover** pipeline to produce an ad-free copy.
-4. Stores each show in its own folder.
-5. Publishes a clean RSS feed per show (plus OPML), generated from the files in
-   that folder.
-6. Serves the audio with HTTP Range support so Overcast (or any podcast client)
-   can stream and seek.
-7. Gives you a web page to add feeds, configure each show, review flagged
-   episodes, and copy the generated feed URL.
+1. Subscribes to official podcast RSS feeds.
+2. Polls them and downloads new episodes.
+3. Runs the vendored **ad-remover** pipeline (whisper.cpp + repeat/sponsor
+   detection + ffmpeg cut + QA) to produce an ad-free copy.
+4. Holds the clean copy for review before publishing (by default).
+5. Publishes **one private RSS feed per podcast**, plus audio served with HTTP
+   Range support, for Overcast or any podcast client.
+6. Provides a local web UI to add feeds, import OPML, configure each show,
+   browse older episodes, flag them for processing, review cuts, and copy the
+   private feed URL.
 
-The phone never talks to the original podcast feeds; it subscribes only to the
-Un-Interupted feeds.
+The phone only talks to this Mac. Original feeds are never exposed.
 
 ---
 
-## 2. Key design decisions
+## 2. Locked decisions
 
-### 2.1 Reuse the existing pipeline, don't rewrite it
+| Topic | Decision |
+|---|---|
+| Host | Native macOS (Mac mini M1, 16 GB), no Docker |
+| Whisper | Native `whisper-cli` from Homebrew (Metal); model downloaded on first run, not bundled |
+| Python | 3.12 virtualenv, created by `scripts/bootstrap.sh` |
+| Toolchain | First-run UI installs `ffmpeg` + `whisper.cpp` via Homebrew and downloads `ggml-large-v3-turbo-q5_0.bin` (~574 MB) |
+| Network | LAN only for now; remote access is out of scope |
+| Auth | One admin password + per-podcast feed/media tokens; no multi-user |
+| Feed shape | One private feed per podcast; **no combined feed**; admin-only OPML export |
+| Review | Download → transcribe → detect → **AWAITING REVIEW**; publish only after approval by default |
+| Auto-publish | Opt-in per podcast, gated on history/confidence/warnings |
+| Backfill | Default **latest 3**; UI offers 0/3/5/10/all; older episodes can be flagged individually |
+| Retention | Per-podcast dropdown: 0/7/14/30/60/90/180/365 days or keep forever; **originals only** (clean files are never auto-deleted) |
+| Metadata | Preserve original title, description, link, comments, pubDate, episode/season, artwork; clean title gets ` (no ads)` |
+| Artwork | Cached locally and served from the app |
+| Audio | Preserve source format when possible; MP3 uses the upstream stream-copy cutter, other containers use an ffmpeg re-encode fallback |
+| Language | Auto-detect from the feed, editable per show (`auto`/`fr`/`en`/…); Whisper and QA share it |
+| Ads | Default policy: remove clear sponsor/network reads and repeated blocks; flag ambiguous cuts for review |
+| Port | `8090` by default; auto-detected LAN IP; both editable at setup/settings |
+| Storage | GUI-selected root; default `~/Podcasts/Un-Interupted`; relocatable from Settings |
+| Spelling | Folder/repo stays `Un-Interupted` |
 
-`RemoveAdds/ad-remover` already contains the hard part: whisper transcription,
-repeated-ad detection, sponsor-language cues, RMS-based cut refinement, stream
-copy cutting, seam QA, and audio verification.
+### Existing data
 
-The app will first **orchestrate those scripts as subprocesses** (each podcast
-gets its own work directory), then gradually extract stable parts into an
-importable Python module. This avoids a risky rewrite and keeps the skill usable
-on its own.
-
-Note: the scripts are cwd-relative (`work/labels.json`, `work/tr_*.json`,
-`work/cuts_*.json`). The orchestrator will run each job with
-`cwd = podcasts/<slug>/work/` and invoke scripts by absolute path. No script
-changes are required for the MVP.
-
-### 2.2 Review gate before publishing (default)
-
-The skill's own rule is: *detection without review is not trusted*. Ads that are
-dynamically read, woven into conversation, or occur only once are unreliable.
-
-Therefore the default flow is:
-
-```
-download → transcribe → detect cuts → AWAITING REVIEW
-                                            │
-                              approve ──────┴────── reject / edit ranges
-                                 │
-                             cut → QA → verify → PUBLISH
-```
-
-Auto-publish can be enabled **per podcast** after enough approved episodes and
-only when confidence checks pass (see §7.4). If anything looks wrong, the
-episode falls back to review instead of publishing a bad file.
-
-### 2.3 One podcast = one folder
-
-```
-/data/
-  db.sqlite3
-  models/ggml-large-v3-turbo-q5_0.bin
-  cache/artwork/<slug>.jpg
-  podcasts/
-    conan-obrien/
-      episodes/        ← clean files; this is what the RSS feed scans
-      originals/       ← downloaded source files; never served
-      work/            ← labels.json, transcripts, cuts, logs
-    les-grosses-tetes/
-      episodes/
-      originals/
-      work/
-```
-
-- The feed is generated by scanning `episodes/` (newest first), so dropping a
-  file there manually also publishes it.
-- `originals/` and `work/` are excluded from the feed.
-- Episode display metadata (real title, description, publish date, duration,
-  original GUID) lives in SQLite and is matched to files by a stable filename.
-- Filenames stay ASCII-safe and collision-free:
-  `YYYY-MM-DD - episode-slug - <guid8> (no ads).mp3`
-  The original title is preserved in ID3 and in the RSS `<title>`, not inferred
-  from the filename.
-
-### 2.4 Web + worker are separate processes
-
-Transcription takes minutes and saturates the CPU/GPU. It must not block the web
-server. Both run from the same image:
-
-- `web` — FastAPI + Jinja2/HTMX, serves UI, RSS, OPML, and media.
-- `worker` — polls feeds, claims jobs from SQLite, runs the pipeline.
-
-SQLite in WAL mode is enough for a single-user home deployment. A job table with
-one worker (concurrency configurable) is simpler and more robust than adding
-Redis/Celery. If you later want multiple workers, the same interface can move to
-Postgres + a real queue.
+The old MP3s in `RemoveAdds/` are **not** imported. The app starts from the RSS
+feeds in `~/Documents/Overcast Podcast Subscriptions.opml`. The old model may be
+reused manually by setting `UNINTERUPTED_MODEL`, but a fresh install downloads
+its own copy.
 
 ---
 
 ## 3. Architecture
 
 ```
-┌────────────────────┐        ┌─────────────────────────────┐
-│  Browser (HTMX)    │        │  Podcast client (Overcast)  │
-└─────────┬──────────┘        └──────────────┬──────────────┘
-          │ admin UI / review                │ RSS + audio (Range)
+┌────────────────────┐        ┌──────────────────────────┐
+│ Browser (HTMX)     │        │ Overcast / podcast app   │
+└─────────┬──────────┘        └─────────────┬────────────┘
+          │ admin UI                         │ RSS + Range audio
           ▼                                  ▼
-┌───────────────────────────────────────────────────────────┐
-│  web (FastAPI)                                            │
-│  auth · add feed · settings · review · RSS · OPML · media  │
-└──────────────┬───────────────────────────────┬────────────┘
-               │ SQLite (WAL)                  │ files
-               ▼                               ▼
-┌────────────────────────────┐      ┌───────────────────────┐
-│  worker                    │      │  /data/podcasts/...   │
-│  scheduler · job queue     │─────▶│  episodes/ originals/ │
-│  feed poller · pipeline    │      │  work/                │
-└──────────────┬─────────────┘      └───────────────────────┘
-               │ subprocess (ffmpeg, whisper-cli, scripts)
+┌──────────────────────────────────────────────────────────┐
+│ app.web — FastAPI                                        │
+│ setup · auth · feeds · review · queue · RSS · OPML · media│
+└──────────────┬──────────────────────────────┬────────────┘
+               │ SQLite WAL                   │ files
+               ▼                              ▼
+┌────────────────────────────┐      ┌──────────────────────┐
+│ app.worker (thread)        │      │ storage/podcasts/... │
+│ scheduler · job queue      │─────▶│ episodes/ originals/ │
+│ pipeline stages            │      │ work/ logs/          │
+└──────────────┬─────────────┘      └──────────────────────┘
+               │ subprocesses
                ▼
-        ad-remover/scripts
+   app/engine/upstream/scripts
+   (vendored ad-remover: transcribe, detect, cut, QA)
 ```
 
-### Components
+### Runtime layout
 
-| Component | Responsibility |
-|---|---|
-| `web` | Admin UI, feed management, review screens, RSS/OPML, Range media serving, health |
-| `worker` | Feed polling schedule, job claiming, downloads, pipeline execution, cleanup/retention |
-| `pipeline` | Thin Python wrapper around ad-remover scripts; structured results + logs |
-| `db` | Podcasts, episodes, jobs, artifacts, settings, feed tokens |
-| `files` | Per-podcast folders, safe naming, artwork cache |
+- **One process** (`python -m app`) hosts the web UI and one worker thread.
+  `UNINTERUPTED_NO_WORKER=1` is available for development.
+- The worker holds an exclusive `flock` (`worker.lock`) so a second instance
+  cannot double-process jobs, and writes `worker.json` every 10 s so long
+  transcriptions do not look like a dead worker.
+- SQLite in WAL mode is the queue and the source of truth. Job claiming uses
+  `BEGIN IMMEDIATE`; one heavy job runs at a time.
+- The ad-removal engine is isolated behind `app/engine/adapter.py`. Only that
+  module knows the upstream script names and cwd rules. An engine failure is a
+  per-episode failure, never an app crash.
 
-### Suggested repo layout
+### Engine contract and upgrades
+
+- Scripts live in `app/engine/upstream/scripts/`; version/upstream notes in
+  `app/engine/upstream/VERSION` and `UPSTREAM.md`.
+- Every job runs with `cwd = podcasts/<slug>/` so the upstream scripts can use
+  their expected relative `work/` paths. Scripts are invoked by absolute path.
+- To upgrade: replace the vendored scripts, keep the one documented local patch
+  (`refine.sh` honors `WHISPER_LANG`), bump `VERSION`, and run one review
+  episode before trusting auto-publish. No other app module changes.
+
+---
+
+## 4. Storage layout
+
+App state lives in `~/Library/Application Support/Un-Interupted/`:
 
 ```
-Un-Interupted/
-  PLAN.md
-  README.md
-  pyproject.toml
-  docker-compose.yml
-  Dockerfile
-  .env.example
-  app/
-    main.py            # FastAPI app factory + routes
-    config.py          # env + paths
-    db.py              # SQLite schema + queries
-    models.py          # Pydantic + domain models
-    feeds.py           # feed discovery/polling/parsing
-    downloader.py      # resumable HTTP download
-    pipeline.py        # ad-remover orchestration
-    rss.py             # RSS 2.0 + iTunes + OPML builders
-    media.py           # Range/ETag/Last-Modified serving
-    worker.py          # scheduler + job loop
-    auth.py            # single-admin session auth
-    routes/            # UI + API routes
-    templates/
-    static/
-  tests/
-    fixtures/          # small synthetic audio + feed XML
-  scripts/
-    install-macos.sh   # optional native install
-    install-linux.sh   # optional native install
-  docs/
-    deployment.md
-    adding-a-podcast.md
-    troubleshooting.md
+config.json          # secret_key, password hash, storage root, base URL, port
+db.sqlite3           # podcasts, episodes, jobs, settings
+models/              # ggml-large-v3-turbo-q5_0.bin (downloaded on first run)
+cache/artwork/       # local artwork cache
+logs/                # setup.log, worker.log, job logs for non-podcast jobs
+setup_state.json     # first-run toolchain progress
+worker.json / .lock  # heartbeat and single-worker guard
 ```
 
----
-
-## 4. Data model (SQLite)
-
-```sql
-podcasts (
-  id, slug UNIQUE, name, feed_url, site_url,
-  description, author, language, category, explicit,
-  artwork_url, artwork_path,
-  labels_json,              -- per-podcast [[regex, title], ...]
-  ad_show_stop,             -- regex for show re-entry / idents
-  ad_lang,                  -- auto | fr | en
-  auto_process,             -- download + process automatically
-  auto_publish,             -- publish without review (off by default)
-  backfill_limit,           -- 0 = new episodes only
-  poll_interval_minutes,
-  feed_token,               -- secret token for the private feed URL
-  last_polled_at, last_error, created_at
-)
-
-episodes (
-  id, podcast_id, guid UNIQUE per podcast, title, description,
-  published_at, original_url, original_path,
-  clean_path, clean_guid,
-  status,                   -- discovered|downloading|downloaded|transcribing|
-                            -- detecting|awaiting_review|cutting|qa|publishing|
-                            -- published|failed|skipped
-  confidence,               -- 0..1 heuristic (see §7.4)
-  cuts_json,                -- proposed/approved [[start,end], ...]
-  duration_original, duration_clean, file_size,
-  error_message, log_path, created_at, updated_at
-)
-
-jobs (
-  id, episode_id, type,     -- download|transcribe|detect|cut|qa|publish
-  state, attempts, run_after, started_at, finished_at, error
-)
-
-settings (key, value)       -- base URL, retention days, concurrency, etc.
-```
-
-Episode identity uses the original feed `<guid>`; filenames are derived but the
-DB is authoritative. Re-polling the same feed never creates duplicates.
-
----
-
-## 5. Web UI
-
-### Screens
-
-1. **Dashboard**
-   - Podcast cards: artwork, name, episode counts by status, last poll, last error.
-   - Queue depth, disk usage, worker health, model status.
-2. **Add podcast**
-   - Paste feed URL → preview channel metadata + latest episodes.
-   - Choose backfill: none / latest N / all.
-   - Toggle auto-process and auto-publish.
-   - Creates folder and starts polling.
-3. **Podcast detail**
-   - Copy buttons for RSS URL and OPML; QR code for the feed URL.
-   - Settings: title/description/artwork override, language, category,
-     poll interval, retention, auto-process/auto-publish.
-   - **Ad calibration editor**: `labels.json` rows (regex + sponsor name),
-     `AD_SHOW_STOP`, `AD_LANG`, with a "test against last transcript" button.
-   - Episode table with status, duration saved, confidence, actions.
-4. **Review screen** (the core screen)
-   - Audio player for original (and proposed clean preview if available).
-   - Proposed cut ranges on a timeline + transcript excerpt around each cut.
-   - Sponsor label per range, confidence, warnings (large cut ratio, no repeats,
-     QA failure).
-   - Buttons: Approve, Edit ranges, Reject (keep original / skip), Reprocess,
-     Re-run detection with different settings.
-5. **Queue / logs**
-   - Live-ish job list, per-job log tail, retry/cancel.
-6. **OPML**
-   - `/opml.xml` with all private feed URLs, for one-shot import.
-
-No frontend build step: Jinja2 + HTMX + small vanilla JS. Easy to run from a
-single container.
-
-### Auth and privacy
-
-- Single admin account: password from env (`ADMIN_PASSWORD`), signed session
-  cookie. Optional `ADMIN_USER`.
-- Feed and media URLs include a per-podcast token:
-  `/feed/<slug>/<token>.xml`, `/media/<slug>/<token>/<file>`.
-  This prevents a random LAN/internet visitor from browsing your library.
-- Originals are never exposed over HTTP.
-- The admin UI can additionally be protected by the reverse proxy.
-
----
-
-## 6. RSS and media serving
-
-### Feed requirements for Overcast / Apple Podcasts
-
-- RSS 2.0 with `itunes` namespace and `atom:link rel="self"`.
-- `<enclosure url length type>` for every episode.
-- Stable `<guid isPermaLink="false">` derived from original GUID + clean marker,
-  so clients don't re-download on regeneration.
-- Original `<pubDate>` (not file mtime) so episode order matches the show.
-- `<itunes:duration>`, `<itunes:author>`, `<itunes:image>`, `<itunes:category>`,
-  `<itunes:explicit>`, `<itunes:type>episodic`.
-- Channel `<title>`: original title, optionally suffixed ` (no ads)`. Ask.
-- Cached local artwork (downloaded once from the original feed) so the phone
-  does not depend on the original host.
-- `ETag` / `Last-Modified` on the feed; clients poll politely.
-- Media served with `Accept-Ranges: bytes`, `Content-Range`, `206`, and
-  `ETag`/`If-Range`; seeking works in Overcast.
-- `/opml.xml` exports every private feed URL.
-- Optional combined "All shows" feed (useful for testing; per-show feeds are the
-  primary product).
-
-### Folder scan vs database
-
-The feed is built from the **files present in `episodes/`**, as requested. Each
-file is matched to its DB episode for title/description/date/duration. If the DB
-row is missing (file added by hand), the filename becomes the title and the file
-is still published. This keeps the "drop a file in the folder" behaviour while
-retaining rich metadata for downloaded episodes.
-
----
-
-## 7. Processing pipeline
-
-### 7.1 Feed polling
-
-- Scheduler polls each podcast every N minutes (default 30).
-- Conditional GET with stored `ETag` / `Last-Modified`.
-- New entries → insert `episodes` + enqueue download.
-- Existing GUIDs are ignored. Removed-from-feed episodes are kept locally.
-- Backfill limit applies on first add.
-- Download to `originals/` with temp file + atomic rename, resumable via HTTP
-  Range where the server supports it. Enforce max size / disk guard.
-
-### 7.2 Per-episode job chain
+Library files live under the selected storage root:
 
 ```
-discover → download → transcribe → detect → [review] → cut → qa → verify → publish
+podcasts/
+  <slug>/
+    episodes/        # clean files, the only audio served publicly
+    originals/       # downloaded sources, admin-only, retention applies
+    work/            # transcripts, cuts, clean previews, labels, per-job logs
 ```
 
-Each step is a job row with attempts, timeout, and log capture. The worker
-processes one heavy job at a time by default (`WORKER_CONCURRENCY=1`), because
-whisper already uses all cores.
-
-### 7.3 Running ad-remover
-
-For each episode, in `podcasts/<slug>/work/`:
-
-1. Write/refresh `work/labels.json` from the podcast settings.
-2. `transcribe.sh <original> <tag>` with `WHISPER_MODEL`, `WHISPER_LANG`.
-3. `detect_cuts.py <original> work/tr_<tag>.json work/cuts_<tag>.json` with
-   `AD_SHOW_STOP`, `AD_LANG`, `--labels work/labels.json`.
-4. Parse the cut report; compute confidence; store proposed cuts.
-5. On approval: `cut.py <original> "<title> (no ads).mp3" work/cuts_<tag>.json`.
-6. `qa_join.py` and `verify_audio.sh`; only publish on exit 0.
-7. Move final file atomically into `episodes/`; update DB; keep work artifacts
-   according to retention.
-
-The app will **not** rely on `recap.py`'s cwd globbing; it reads the JSON
-artifacts and presents its own per-episode summary. The skill remains intact and
-independently usable.
-
-### 7.4 Confidence and auto-publish
-
-Proposed heuristic (tunable after real data):
-
-- Repeated ad block found ≥ 2 times → strong signal.
-- Sponsor-language hits inside proposed ranges → strong.
-- Cut ratio within the podcast's historical range → medium.
-- QA/verify pass → required, never optional.
-- No repeats + only generic cues → **always review**.
-- Cut ratio > 25% or < 1% → suspicious, review.
-- New podcast with < 3 approved episodes → always review by default.
-
-Auto-publish only when all required checks pass and the podcast has opted in.
-Otherwise the episode waits in `awaiting_review`; the original is kept and the
-clean feed simply doesn't list it yet.
-
-### 7.5 Retention and disk
-
-- Keep originals for N days after successful publish (default 30), then delete.
-- Keep transcripts/cut plans for N days or until `--all` cleanup (they are small
-  and save expensive re-transcription).
-- Never delete a published clean file automatically without asking.
-- Disk guard: pause downloads below a configurable free-space threshold.
+Filenames are ASCII-safe and stable:
+`YYYY-MM-DD - episode-slug - <guid8> (no ads).mp3`. The real title remains in
+the DB and in the RSS item; the filename is not the title source for downloaded
+episodes.
 
 ---
 
-## 8. Packaging & deployment recommendation
+## 5. Data model (SQLite, schema v1)
 
-### Recommendation: **Docker Compose as the primary, supported deployment**
+- `podcasts`: slug, feed URL, metadata, artwork, `labels_json`, `ad_show_stop`,
+  `ad_lang`, auto-process/publish, backfill/poll/retention, `feed_token`,
+  conditional-GET validators, last error.
+- `episodes`: original GUID, metadata, original URL/path, clean filename/guid/
+  duration/size, status, confidence, proposed/approved cuts, review JSON,
+  engine version, error, feed `published_at`, `clean_published_at`.
+- `jobs`: type, state, podcast/episode, payload, priority, attempts,
+  `run_after`, log path, progress.
+- `settings`: key/value (`last_cleanup_at`, `default_retention_days`).
 
-Ship one image with two services:
+Episode statuses:
 
-```yaml
-services:
-  web:
-    image: uninterupted:latest
-    restart: unless-stopped
-    ports: ["8090:8090"]
-    volumes: ["uninterupted-data:/data"]
-    env_file: .env
-    healthcheck: ...
-  worker:
-    image: uninterupted:latest
-    restart: unless-stopped
-    command: ["python", "-m", "app.worker"]
-    volumes: ["uninterupted-data:/data"]
-    env_file: .env
+`discovered → queued → downloading → downloaded → transcribing → detecting →
+awaiting_review → approved → cutting → qa → ready_publish → publishing →
+published`, plus `qa_failed`, `failed`, `skipped`.
+
+`clean_published_at` is the retention clock; the original feed `published_at`
+is kept for RSS ordering and display.
+
+---
+
+## 6. Processing pipeline
+
+1. **Poll** — conditional GET; upsert all entries by GUID; auto-select new ones
+   only if the podcast has auto-process enabled.
+2. **Download** — resumable HTTP Range, `.part` + atomic rename, free-space
+   guard, never overwrite an existing original.
+3. **Transcribe** — `transcribe.sh` with the app model and podcast language.
+4. **Detect** — `detect_cuts.py` with per-podcast labels, show-stop, ad language;
+   build a review object with cut excerpts, labels, repeats, warnings, and a
+   confidence score.
+5. **Review** — default stop. The UI lets the user edit/delete/add ranges,
+   approve, skip, re-detect, or re-cut.
+6. **Cut** — upstream `cut.py` for MP3 (stream copy); generic ffmpeg
+   `atrim`+`concat` re-encode for other containers. Duration sanity check.
+7. **QA** — `qa_join.py` seam checks + `verify_audio.sh` + Python full-decode
+   verification. QA failure marks `qa_failed`; it never reaches the feed.
+8. **Publish** — atomic move to `episodes/`, set clean GUID/size/duration/
+   `clean_published_at`, enqueue retention cleanup.
+9. **Cleanup** — daily; deletes originals older than the per-podcast retention
+   window. Clean files are never deleted automatically.
+
+### Auto-publish gate
+
+Auto-publish is off by default. When enabled for a podcast, an episode can skip
+review only if:
+
+- the podcast already has at least 3 published episodes,
+- the review has no warnings,
+- confidence is at least 0.80,
+- and QA passes.
+
+Otherwise it stays in `awaiting_review`.
+
+---
+
+## 7. Web UI
+
+- **Dashboard** — cards per podcast (artwork, status counts, last poll, error),
+  queue depth, worker/toolchain health.
+- **Add podcast** — URL preview, backfill 0/3/5/10/all, auto-process.
+- **Import OPML** — upload or paste; select feeds and backfill.
+- **Podcast detail** — copy feed URL, QR code, per-show settings (title,
+  description, author, language, category, labels JSON, show-stop, ad language,
+  poll interval, retention, auto-process/auto-publish), library sizes, and a
+  filterable/paginated episode table with individual **Process** buttons.
+- **Review** — original audio player, proposed clean preview, cut rows with
+  transcript excerpts/warnings, editable start/end, approve/skip/re-detect/
+  re-cut.
+- **Queue / job** — job list, states, attempts, per-job log tail, retry/cancel.
+- **Settings** — base URL, port, default retention, admin password, storage root
+  relocation (queued copy job with marker/overlap guards).
+- **First run** — setup, toolchain install with live progress, then dashboard.
+
+No frontend build step: Jinja2 + HTMX + small vanilla JS.
+
+---
+
+## 8. RSS and media
+
+- RSS 2.0 with iTunes, Atom self-link, and `content:encoded`.
+- Channel: original title + ` (no ads)`, description, language, author,
+  category, explicit, local artwork.
+- Item: original title/description/link/comments/pubDate, iTunes episode/season,
+  duration, author, explicit, artwork.
+- Stable GUID: `uninterupted:<slug>:<original-guid>:clean` (or filename hash for
+  hand-dropped files).
+- One private feed per podcast: `/feed/<slug>/<token>.xml`.
+- Media: `/media/<slug>/<token>/<filename>` with `Accept-Ranges`, `206`,
+  `Content-Range`, ETag, Last-Modified, If-None-Match, If-Range, HEAD, 416.
+- Local artwork: `/artwork/<slug>/<token>.<ext>`, with SVG placeholder fallback.
+- Admin-only OPML: `/opml.xml` containing all private feed URLs.
+- The feed scans `episodes/`; a hand-dropped audio file is published even if it
+  has no DB row, using the filename as the title.
+
+---
+
+## 9. Toolchain and first run
+
+`scripts/bootstrap.sh`:
+
+1. Finds/installs Homebrew `python@3.12`.
+2. Creates `.venv`, installs `requirements.txt`.
+
+`scripts/run.sh` / `Un-Interupted.command` start `python -m app`.
+
+On first run the setup page asks for storage root, base URL, and admin password.
+`app/toolchain.py` then:
+
+- checks `ffmpeg`, `ffprobe`, `whisper-cli`, the model, and the vendored scripts;
+- installs missing Homebrew formulas (`ffmpeg`, `whisper.cpp`);
+- downloads the model from Hugging Face with resume and progress;
+- writes `setup_state.json` and `logs/setup.log`;
+- marks `toolchain_ready` when everything is present.
+
+The model is **not** in the repo. On a clean Mac the first run needs network
+access and roughly 1 GB of free space.
+
+### macOS notes
+
+- Homebrew must be installed.
+- If `brew install` fails on a fresh machine, accept the Xcode license once:
+  `sudo xcodebuild -license accept`.
+- Gatekeeper may warn on the double-click `.command`; right-click → Open.
+- Optional autostart: `scripts/install-launchd.sh` (label `com.uninterupted.app`),
+  removed with `scripts/uninstall-launchd.sh`.
+
+---
+
+## 10. Security and privacy
+
+- Admin password hashed with PBKDF2-SHA256 (600k iterations), signed HttpOnly
+  session cookie (30 days).
+- Feed/media/artwork require the per-podcast token; comparison is constant-time.
+- Originals and work artifacts are admin-only and never appear in feeds.
+- LAN HTTP only; `secure=False` on the cookie. Put Tailscale/Caddy in front if
+  exposing beyond the LAN, and set the base URL to the reachable address.
+- No CSRF tokens yet (single-user LAN app). Add them before any public exposure.
+- The app does not phone home; the only outbound calls are feed/artwork/model
+  downloads.
+
+---
+
+## 11. Testing
+
+`tests/` (19 tests, no ffmpeg/whisper required):
+
+- slug/filename/duration/safe-join helpers
+- RSS/OPML parsing (including real-world fixture shape)
+- review confidence/warnings/excerpts
+- feed XML validity, stable GUID/enclosure/duration, hand-dropped files, OPML
+- setup/login redirects, admin pages, podcast/review rendering
+- media Range/HEAD/ETag/304 and token rejection.
+
+Run with:
+
+```bash
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest -q
 ```
 
-Why Docker wins here:
-
-| Criterion | Docker Compose | Native installer |
-|---|---|---|
-| Reproducible whisper.cpp + ffmpeg build | ✅ one image | ❌ depends on OS/Homebrew versions |
-| Works on Linux server / NAS / Proxmox | ✅ | ⚠️ per-distro work |
-| Same artifact for web + worker | ✅ | ⚠️ |
-| Upgrades / rollback | ✅ pull image | ⚠️ script + venv |
-| Data persistence | ✅ named volume / bind mount | ✅ but paths vary |
-| Apple Silicon GPU (Metal) | ❌ not in Linux container | ✅ native only |
-| NVIDIA GPU | ✅ with container toolkit | ✅ |
-| Initial setup | one compose file + env | Homebrew/build steps |
-| Support burden | low | high |
-
-### What Docker does and does not make portable
-
-Docker makes the **application, dependencies, commands, and deployment**
-portable. The same multi-arch image (`linux/arm64` + `linux/amd64`), the same
-compose file, and the same `/data` layout run on an M1 Mac and on a Proxmox
-host. Migrating is: stop the stack, copy the data folder/volume, run
-`docker compose up -d` on the new host. No app rebuild or reinstall.
-
-Docker does **not** make **hardware acceleration** portable. A container on
-macOS runs inside a Linux VM, so it cannot use Apple's Metal GPU. whisper.cpp
-in that container falls back to CPU. On Proxmox, Docker runs natively on Linux,
-so it gets the full CPU (and optionally a passed-through GPU).
-
-| Host | Docker runtime | whisper acceleration |
-|---|---|---|
-| M1 Mac (Docker Desktop / OrbStack / Colima) | Linux VM, `linux/arm64` | **CPU only** (no Metal in Linux container) |
-| M1 Mac (native mode) | none | **Metal / CoreML** via native `whisper-cli` |
-| Proxmox x86_64 | native Linux, `linux/amd64` | full CPU; optional CUDA/Vulkan passthrough |
-| Proxmox ARM | native Linux, `linux/arm64` | full CPU |
-
-So: Docker gives you **operational** platform independence, which is exactly
-what you want for M1 → Proxmox. It does not give you **performance**
-independence; that is a property of the host and the build flags.
-
-**Recommendation for your case: Docker-first on both hosts.** Start on the M1
-with the Docker stack (CPU-only whisper). Benchmark one real 100-minute episode
-before locking the default. If CPU-only is fast enough, you get the simplest,
-most portable setup. If it is too slow, keep the same codebase and add a
-**native worker mode** for macOS (launchd + native `whisper-cli`, Metal), or move
-the worker to the Proxmox host. The app will expose a `WHISPER_BACKEND` setting
-(`cpu` / `metal` / `cuda` / `auto`) so the compute path is a configuration
-choice, not an architectural rewrite.
-
-To keep migration trivial: store paths in the database **relative to `/data`**
-(never `/Users/julien/...`), keep `./data` as a bind mount or named volume, and
-keep the SQLite schema host-independent.
-
-The model (574 MB) is **not** baked into the image. It is downloaded on first
-start into the data volume (`/data/models/`) so image pulls stay reasonable and
-the model can be swapped. The image contains ffmpeg, whisper.cpp (multi-arch
-build), Python deps, app code, and the ad-remover scripts.
-
-### Remote access (phone outside the LAN)
-
-- **At home:** plain `http://<lan-ip>:8090` usually works in Overcast. Give the
-  host a static DHCP lease so the URL doesn't change.
-- **Away:** do **not** expose port 8090 directly. Use either:
-  - **Tailscale** (recommended): private, no ports, `tailscale serve` gives an
-    HTTPS URL; install Tailscale on the phone.
-  - **Caddy** sidecar with a domain + Let's Encrypt for HTTPS.
-- Always use the `PUTCLEAN_BASE_URL` / `BASE_URL` setting so generated RSS URLs
-  point at the address the phone can actually reach (LAN IP, Tailscale name, or
-  public domain).
-
-### Sizing
-
-- Transcription: budget ~8 min per 100 min episode on an M4 with Metal; expect
-  slower on CPU-only NAS/Raspberry Pi. A 4-core N100 mini-PC is a reasonable
-  budget server; a Raspberry Pi 5 works but will be slow.
-- Storage: roughly 2× the original library (original + clean). A 100 min episode
-  is 50–100 MB each. Plan for a 500 GB–1 TB volume.
+A real end-to-end run was performed with a local feed + a 92 s episode:
+download → transcribe (40 s) → detect → review (confidence 0.5, warning) →
+approve → cut → QA pass → publish → RSS item → Range 206.
 
 ---
 
-## 9. Phased delivery
+## 12. Remaining work / known limitations
 
-### Phase 0 — Decisions & scaffold (0.5 day)
-- Answer the questions in §12.
-- Create repo, pyproject, config, DB schema, folder layout.
-- Reuse/adapt the partial FastAPI scaffold currently in `RemoveAdds/app/`
-  (`config`, `db`, `rss`, `media`, `downloader`) where it fits; rewrite the RSS
-  builder to use DB metadata instead of filenames.
-
-### Phase 1 — Working end-to-end MVP (2–4 days)
-- Add feed via UI; preview metadata.
-- Poll + download latest episode.
-- Run the full ad-remover pipeline manually from the UI (review screen may be
-  minimal: show proposed cuts as JSON/time ranges).
-- Produce clean file, QA/verify, move to `episodes/`.
-- Generate per-podcast RSS + OPML; play/seek in Overcast.
-- Copy feed URL from the web page.
-- Acceptance: subscribe in Overcast, play a downloaded episode, seek, and see
-  no ads at the seams.
-
-### Phase 2 — Review workflow & queue (2–3 days)
-- Proper job queue, retries, per-job logs, cancel.
-- Review screen with transcript excerpts and editable ranges.
-- Episode statuses and failure surfacing.
-- Calibration editor (`labels.json`, show-stop, language).
-- Retention/disk guard.
-- Acceptance: a failed QA never reaches the feed; review edits produce a new
-  clean file deterministically.
-
-### Phase 3 — Automation & learning (2–4 days)
-- Scheduled polling and auto-processing for trusted podcasts.
-- Confidence scoring + auto-publish gated by podcast history.
-- Suggest ad signatures by cross-episode repeat detection.
-- Notifications (optional: ntfy/email/webhook on failure or review needed).
-- Acceptance: a new episode of a calibrated show is published without manual
-  action for N consecutive episodes, and falls back to review on anomalies.
-
-### Phase 4 — Packaging & polish (1–2 days)
-- Multi-arch Dockerfile, compose profiles (`web`, `worker`, optional `caddy`).
-- Native install scripts + launchd/systemd units (macOS/Linux).
-- Backups/restore docs, upgrade docs, health checks.
-- Acceptance: fresh machine → `docker compose up -d` → add feed → Overcast in
-  under 15 minutes (plus model download and transcription time).
-
-Rough total: **7–13 developer days** for the MVP through a solid v1, excluding
-the unavoidable tuning of ad detection per podcast.
+- **Clean-machine first run**: the model download and Homebrew path have been
+  verified only with the model already present via `UNINTERUPTED_MODEL`. Do one
+  fresh install before calling it shipped.
+- **Real subscriptions**: import the four OPML feeds and calibrate labels per
+  show (especially Les Grosses Têtes and Conan).
+- **Podcast client acceptance**: subscribe in Overcast, refresh, stream, seek,
+  background play, and check new-episode pickup.
+- **Ad policy**: defaults are conservative; per-show labels still need tuning.
+- **Non-MP3**: generic re-encode path is implemented but not exercised on a real
+  m4a/aac feed yet.
+- **Notifications**: dashboard only.
+- **Private/paid feeds**: public RSS only.
+- **CSRF / multi-user / remote auth**: intentionally out of v1 scope.
+- **`labels_json` UI**: raw JSON editor; a friendlier regex tester can come
+  later.
+- **Artwork metadata**: item-level artwork is not preserved separately; channel
+  artwork is used for items.
 
 ---
 
-## 10. Risks and mitigations
+## 13. Next steps
 
-| Risk | Mitigation |
-|---|---|
-| Ad detection is imperfect (dynamic reads, host-read ads, single occurrences) | Default review gate; confidence; per-podcast calibration; never auto-publish uncalibrated shows |
-| Whisper slow on CPU/NAS | Queue one job at a time; native Metal option on Mac; show ETA; allow processing only latest N |
-| Feed URL unreachable from phone | Explicit base URL setting; Tailscale/Caddy docs; QR code + "test from phone" hint |
-| Podcast clients cache feeds aggressively | Stable GUIDs; `pubDate` from original; ETag/Last-Modified; note that new episodes may take a client refresh |
-| Disk growth | Originals retention; disk guard; dashboard usage; optional re-encode |
-| Long jobs / timeouts | Worker process, per-step timeouts, resumable downloads, retries |
-| Duplicate downloads / reprocessing | Original feed GUID as identity; idempotent job steps |
-| Private feed leaks | Per-podcast token, admin auth, no originals exposed, optional reverse-proxy auth |
-| Script cwd assumptions | One work dir per podcast; absolute script paths; integration tests |
-| Copyright / terms | Personal-use tool; user supplies feeds; keep feeds private; document responsibility |
-
----
-
-## 11. Testing strategy
-
-- Unit tests for feed parsing, slug/filename generation, RSS XML validity, Range
-  parsing, retention logic.
-- Fixture feed XML + tiny synthetic MP3 (a few seconds of tone/speech).
-- Pipeline integration test with a **fake transcriber** (no whisper) that emits
-  known transcript JSON, so cut/detect/QA logic is testable in CI.
-- One optional slow end-to-end test with the real model (not in CI).
-- Manual acceptance checklist with Overcast: subscribe, refresh, stream, seek,
-  download, background play, feed update after new episode.
-
----
-
-## 12. Clarifying questions
-
-Please answer these before I start building. If you just say **"use the
-defaults"**, I'll proceed with the recommended option shown in parentheses.
-
-### Must answer
-
-1. **Host machine and OS** — where will this run 24/7? (e.g. always-on Mac mini,
-   Linux mini-PC, Synology/QNAP NAS, Raspberry Pi, VPS). This decides Docker vs
-   native and the performance expectations.
-2. **Network access** — LAN-only, or do you need to listen outside the home?
-   (Default: LAN + Tailscale for remote, no public port.)
-3. **Review vs auto-publish** — should a new episode wait for your approval
-   before appearing in the clean feed, or publish automatically once a show is
-   calibrated? (Default: review first; auto-publish opt-in per podcast after
-   several approvals.)
-4. **Backfill** — when adding a show, how many past episodes? (Default: latest
-   3 for a new show, then new episodes only.)
-5. **Original retention** — keep downloaded originals forever, or delete after
-   the clean version passes QA? (Default: keep 30 days, then delete.)
-6. **Branding of the clean feed** — mirror the original podcast title/artwork,
-   or name it e.g. `Conan O'Brien Needs A Friend (no ads)` with the same
-   artwork? (Default: original metadata + ` (no ads)` suffix.)
-
-### Important
-
-7. **Feed shape** — one private feed per podcast (default), plus an optional
-   combined "All shows" feed and OPML export? Any need for a single combined
-   feed in Overcast?
-8. **Authentication** — single admin password for the web UI, and tokenized feed
-   URLs? Any multi-user need? (Default: single admin + tokens.)
-9. **Audio formats** — MP3 only, or also m4a/aac/flac/ogg? The existing cutter's
-   stream-copy path is proven for MP3; other containers may need re-encoding.
-   (Default: MP3 first, others re-encoded to MP3/AAC.)
-10. **Languages / shows** — which podcasts first (French, English, both)? Do you
-    want per-show language settings? (Default: auto-detect, editable per show.)
-11. **Ad policy** — what should be removed vs kept: sponsor breaks only, or also
-    host self-promos, "subscribe to the show" plugs, prize/game jingles, and
-    sponsor mentions woven into conversation? (Default: remove clear ad breaks
-    and host-read sponsor spots; keep show flow; flag ambiguous ones for review.)
-
-### Nice to answer
-
-12. **Spelling** — keep the exact name `Un-Interupted` (as requested), or use
-    `Uninterrupted`? (Default: keep your spelling for the folder/repo; product
-    name can be changed later.)
-13. **Private/paid feeds** — will any sources require authentication (Patreon,
-    premium feeds, cookies)? (Default: public RSS only for v1.)
-14. **Notifications** — want a push/email/ntfy alert when an episode needs
-    review or a job fails? (Default: dashboard only in v1, hook later.)
-15. **Existing scaffold** — I found the partial FastAPI app in
-    `RemoveAdds/app/` (config, db, rss, media, downloader, no `main.py`). Should I
-    reuse and finish it, or start clean in `Un-Interupted/`? (Default: reuse the
-    good parts, rewrite the RSS/metadata handling.)
-16. **Port and URLs** — is `8090` fine, and do you have a hostname/domain you
-    want to use? (Default: `8090`, auto-detected LAN IP, configurable later.)
-
----
-
-## 13. Immediate next step
-
-Once the questions above are answered, I will:
-
-1. Finalize the architecture decisions and folder layout.
-2. Scaffold `Un-Interupted/` with the DB schema, config, and web/worker entry
-   points.
-3. Deliver Phase 1: add feed → download → process (manual) → RSS → play in
-   Overcast.
-4. Then iterate through Phases 2–4.
+1. Fresh-machine install test (delete app support, run `scripts/run.sh`, let the
+   toolchain installer download the model).
+2. Import the four Overcast feeds with backfill 3.
+3. Calibrate `labels_json` / `ad_lang` per show; process one episode each.
+4. Subscribe in Overcast, verify seek/stream/download.
+5. Tune confidence/auto-publish after a few approved episodes.

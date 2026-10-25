@@ -1,4 +1,3 @@
-from pathlib import Path
 
 from app.paths import (
     ascii_slug,

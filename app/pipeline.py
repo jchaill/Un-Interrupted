@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import time
 from pathlib import Path
 from typing import Any
 
-from . import artwork, config, db, feeds
+from . import config, db, feeds
 from .downloader import DownloadError, download_file
 from .engine import adapter
-from .engine.adapter import EngineError, EngineMissing, QAFailure, probe_duration
+from .engine.adapter import EngineError, EngineMissing, probe_duration
 from .paths import episode_basename, extension_from_url
 from .review import build_review
 
@@ -607,7 +606,7 @@ def handle_relocate(job: dict[str, Any], log: Path) -> None:
 
     if new_root == old_root:
         raise JobFatal("New storage folder is the same as the current one")
-    if new_podcasts.resolve().is_relative_to(old_podcasts.resolve()) or old_podcasts.resolve().is_relative_to(new_podcasts.resolve()):
+    if new_root.is_relative_to(old_root) or old_root.is_relative_to(new_root):
         raise JobFatal("The new storage folder overlaps the current library folder")
 
     if new_root.exists():

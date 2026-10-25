@@ -2,14 +2,11 @@ from __future__ import annotations
 
 import calendar
 import hashlib
-import html
-import json
-import re
 import secrets
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any
 from urllib.parse import urljoin
 
 import feedparser
@@ -17,7 +14,7 @@ import httpx
 from dateutil import parser as date_parser
 
 from . import __version__, config, db
-from .paths import extension_from_url, is_audio_filename, parse_duration
+from .paths import is_audio_filename, parse_duration
 
 USER_AGENT = (
     f"Un-Interupted/{__version__} (personal podcast proxy; "

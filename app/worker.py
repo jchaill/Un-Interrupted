@@ -8,7 +8,6 @@ import threading
 import time
 import traceback
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from . import config, db

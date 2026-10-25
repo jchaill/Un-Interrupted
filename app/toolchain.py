@@ -6,7 +6,6 @@ import shutil
 import subprocess
 import threading
 import time
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -220,7 +219,7 @@ def _install_worker() -> None:
         if not tools["ffmpeg"] or not tools["ffprobe"]:
             formulas.append("ffmpeg")
         if not tools["whisper_cli"]:
-            formulas.append("whisper-cpp")
+            formulas.append("whisper.cpp")
 
         if formulas:
             if not brew:
@@ -280,7 +279,7 @@ def start_install() -> bool:
     global _THREAD
     with _LOCK:
         state = read_state()
-        if state.get("running") and _THREAD is not None and _THREAD.is_alive():
+        if state.get("running"):
             return False
         tools = check_tools()
         if tools["ready"]:

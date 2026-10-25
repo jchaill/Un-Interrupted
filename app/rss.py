@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import email.utils
 import hashlib
-import html
-import os
-import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +10,6 @@ from urllib.parse import quote
 
 from . import artwork, config, db
 from .paths import (
-    CLEAN_SUFFIX,
     display_title_from_filename,
     human_duration,
     is_audio_filename,

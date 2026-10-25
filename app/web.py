@@ -11,9 +11,9 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -22,14 +22,10 @@ from . import __version__, artwork, config, db, feeds, pipeline, rss, security, 
 from .engine import adapter
 from .media import serve_audio, serve_file
 from .paths import (
-    audio_type_for,
-    display_title_from_filename,
     human_duration,
     human_size,
     is_audio_filename,
-    parse_duration,
     safe_join,
-    unique_slug,
 )
 from .review import build_review
 from .worker import worker_status
@@ -576,9 +572,10 @@ def podcast_page(request: Request, slug: str):
     per_page = 100
 
     status = None
+    statuses = None
     selected_only = False
     if filter_name == "review":
-        status = "awaiting_review"
+        statuses = ("awaiting_review", "qa_failed")
     elif filter_name == "failed":
         status = "failed"
     elif filter_name == "published":
@@ -589,11 +586,14 @@ def podcast_page(request: Request, slug: str):
     episodes = db.list_episodes(
         podcast["id"],
         status=status,
+        statuses=statuses,
         selected_only=selected_only,
         limit=per_page,
         offset=(page - 1) * per_page,
     )
-    total = db.count_episodes(podcast["id"], status=status, selected_only=selected_only)
+    total = db.count_episodes(
+        podcast["id"], status=status, statuses=statuses, selected_only=selected_only
+    )
     total_all = db.count_episodes(podcast["id"])
     selected_count = db.count_episodes(podcast["id"], selected_only=True)
     counts = db.episode_status_counts(podcast["id"])
@@ -849,7 +849,7 @@ async def review_approve(request: Request, slug: str, episode_id: int):
 def review_skip(request: Request, slug: str, episode_id: int):
     cfg, _session = security.require_admin(request)
     podcast = _podcast_or_404(slug)
-    episode = _episode_for_podcast(podcast, episode_id)
+    _episode_for_podcast(podcast, episode_id)
     db.update_episode(episode_id, status="skipped", approved_cuts_json=None, error_message="Skipped by user.")
     return _redirect(f"/podcasts/{slug}", msg="Episode skipped; it will not be published.")
 
@@ -967,7 +967,6 @@ def public_media(request: Request, slug: str, token: str, filename: str):
 
 @app.api_route("/artwork/{slug}/{file}", methods=["GET", "HEAD"])
 def public_artwork(request: Request, slug: str, file: str):
-    cfg = config.load_config()
     token, dot, ext = file.rpartition(".")
     if not dot:
         raise HTTPException(status_code=404)
@@ -1188,6 +1187,13 @@ async def settings_storage(request: Request):
     old_root = config.storage_root(cfg).resolve()
     if new_root == old_root:
         return _redirect("/settings", msg="Storage folder is unchanged.")
+    if new_root.is_relative_to(old_root) or old_root.is_relative_to(new_root):
+        return _redirect("/settings", err="The new folder must not be inside the current library (or contain it).")
+    if any(
+        job["type"] == "relocate" and job["state"] in {"queued", "running"}
+        for job in db.list_jobs(limit=50, active_only=True)
+    ):
+        return _redirect("/settings", err="A library move is already queued or running.")
     try:
         new_root.mkdir(parents=True, exist_ok=True)
         probe = new_root / ".uninterupted-write-test"

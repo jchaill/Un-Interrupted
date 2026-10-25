@@ -20,7 +20,7 @@ def main() -> None:
     if os.environ.get("UNINTERUPTED_NO_WORKER", "").lower() not in {"1", "true", "yes"}:
         worker = Worker(stop)
         worker.start()
-        print(f"[uninterupted] worker started (pid thread)", flush=True)
+        print("[uninterupted] worker started (pid thread)", flush=True)
     print(f"[uninterupted] web UI: http://127.0.0.1:{port}/", flush=True)
     if cfg.get("setup_complete"):
         print(f"[uninterupted] base URL: {cfg.get('base_url')}", flush=True)
