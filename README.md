@@ -2,8 +2,8 @@
 
 A private, self-hosted podcast proxy for macOS. It subscribes to official RSS
 feeds, downloads episodes, removes ads with a local Whisper-based pipeline, and
-publishes one clean, private RSS feed per show for Overcast (or any podcast
-client).
+publishes one clean, private RSS feed per show for a podcast client that
+fetches feeds on-device (Downcast confirmed, Apple Podcasts supported).
 
 No Docker and no phone-side setup. The audio never leaves your Mac except when
 your podcast app streams it over the LAN. Every detection job runs an AI pass
@@ -17,7 +17,7 @@ local Ollama model if that is not acceptable.
 
 ## What you get
 
-- Add a feed by URL, or import your Overcast OPML.
+- Add a feed by URL, or import an OPML subscription list.
 - Automatic polling and downloading of new episodes.
 - Ad removal using the vendored `ad-remover` engine:
   whisper.cpp transcription → repeat/sponsor detection → proposed cuts →
@@ -30,7 +30,7 @@ local Ollama model if that is not acceptable.
 - **AI ad detection on every episode** through Ollama (local or cloud), so
   rotating or newly sold sponsor reads do not depend on a fixed regex list.
 - Browse older episodes and flag individual ones for processing.
-- Copy feed URL / QR code straight into Overcast.
+- Copy feed URL / QR code straight into Downcast or Apple Podcasts.
 
 ---
 
@@ -95,7 +95,9 @@ sudo xcodebuild -license accept
 
 7. Open the episode review, check the proposed cuts, and approve.
 
-8. Copy the private feed URL (or scan the QR code) into Overcast.
+8. Copy the private feed URL (or scan the QR code) into **Downcast** (confirmed
+   working) or **Apple Podcasts**. Overcast and other server-side crawlers cannot
+   reach a LAN-only feed.
 
 That's it. New episodes will poll automatically; by default they stop at review
 until you approve them.
@@ -113,7 +115,7 @@ AWAITING REVIEW  ← you listen / check excerpts / edit ranges
    ↓ approve
 cut → QA → verify → published
    ↓
-private feed updates; Overcast sees the clean episode
+private feed updates; Downcast sees the clean episode
 ```
 
 - **Review first** is the default. Nothing is published until you approve it.
@@ -348,6 +350,19 @@ upgrade procedure.
 
 ## Troubleshooting
 
+### Podcast client compatibility
+
+This app generates LAN-only `http://192.168.x.x:8090/...` feed and media URLs.
+Use a client that fetches the RSS feed on the device:
+
+- **Downcast** — confirmed working with this app.
+- **Apple Podcasts** — use **Library → Edit → Add a Show by URL**.
+- **Overcast, Pocket Casts, Castro** — their servers fetch the feed, so they
+  cannot reach a private LAN address. Overcast needs the RSS feed exposed on a
+  public HTTPS URL first.
+
+This is a client architecture limitation, not a Local Network permission issue.
+
 See [docs/troubleshooting.md](docs/troubleshooting.md) for:
 
 - double-click / background server issues
@@ -356,7 +371,8 @@ See [docs/troubleshooting.md](docs/troubleshooting.md) for:
 - model download interruptions
 - "worker not running"
 - episodes stuck in a status
-- Overcast not refreshing or not seeking
+- Downcast refreshing / audio seeking
+- why Overcast cannot add a LAN-only feed
 - storage relocation issues
 - resetting the app safely
 
@@ -365,6 +381,8 @@ See [docs/troubleshooting.md](docs/troubleshooting.md) for:
 ## Known limitations
 
 - LAN only; no built-in HTTPS, Tailscale, or remote auth.
+- Overcast/Pocket Casts/Castro need a publicly reachable feed because they crawl
+  RSS server-side; Downcast and Apple Podcasts fetch it on-device.
 - Public RSS feeds only (no Patreon/private feed auth).
 - Ad detection still needs per-show calibration; ambiguous cuts are flagged.
 - Non-MP3 audio uses a re-encode fallback (implemented, not yet exercised on a

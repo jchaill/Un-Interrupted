@@ -6,7 +6,7 @@
 > cut → QA → published feed → HTTP Range playback.
 >
 > Remaining before calling it v1: first-run model download on a clean machine,
-> a couple of real feeds subscribed in Overcast, and per-show calibration.
+> a couple of real feeds subscribed in Downcast, and per-show calibration.
 
 ---
 
@@ -20,7 +20,9 @@ Un-Interupted is a private, self-hosted podcast proxy for macOS:
    detection + ffmpeg cut + QA) to produce an ad-free copy.
 4. Holds the clean copy for review before publishing (by default).
 5. Publishes **one private RSS feed per podcast**, plus audio served with HTTP
-   Range support, for Overcast or any podcast client.
+   Range support, for on-device podcast clients such as Downcast and Apple
+   Podcasts. Server-side crawlers (Overcast, Pocket Casts, Castro) need a public
+   feed URL.
 6. Provides a local web UI to add feeds, import OPML, configure each show,
    browse older episodes, flag them for processing, review cuts, and copy the
    private feed URL.
@@ -67,7 +69,7 @@ its own copy.
 
 ```
 ┌────────────────────┐        ┌──────────────────────────┐
-│ Browser (HTMX)     │        │ Overcast / podcast app   │
+│ Browser (HTMX)     │        │ Downcast / on-device app │
 └─────────┬──────────┘        └─────────────┬────────────┘
           │ admin UI                         │ RSS + Range audio
           ▼                                  ▼
@@ -349,7 +351,7 @@ approve → cut → QA pass → publish → RSS item → Range 206.
   fresh install before calling it shipped.
 - **Real subscriptions**: import the four OPML feeds and calibrate labels per
   show (especially Les Grosses Têtes and Conan).
-- **Podcast client acceptance**: subscribe in Overcast, refresh, stream, seek,
+- **Podcast client acceptance**: subscribe in Downcast, refresh, stream, seek,
   background play, and check new-episode pickup.
 - **Ad policy**: defaults are conservative; per-show labels still need tuning.
 - **LLM calibration**: run on 10–20 labelled episodes before trusting LLM-only
@@ -372,5 +374,5 @@ approve → cut → QA pass → publish → RSS item → Range 206.
    toolchain installer download the model).
 2. Import the four Overcast feeds with backfill 3.
 3. Calibrate `labels_json` / `ad_lang` per show; process one episode each.
-4. Subscribe in Overcast, verify seek/stream/download.
+4. Subscribe in Downcast, verify seek/stream/download.
 5. Tune confidence/auto-publish after a few approved episodes.

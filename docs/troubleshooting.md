@@ -218,14 +218,24 @@ not enable auto-publish until the ranges are consistently right.
 
 ## Podcast client / feed
 
-### Overcast does not show the new episode
+### Overcast cannot add the LAN feed
 
-- Pull-to-refresh in Overcast; clients cache feeds.
+Overcast fetches RSS feeds through its own servers. Those servers cannot route
+to a private address such as `192.168.18.132`, so **Add URL** times out with a
+misleading “check internet connection” error. Local Network permission on the
+iPhone does not fix this. Use **Downcast** (confirmed working) or **Apple
+Podcasts**, which fetch the feed on-device. To use Overcast, the feed XML must be
+reachable on a public HTTPS URL; audio can still stay local if the iPhone is on
+the LAN.
+
+### Downcast or Apple Podcasts does not show the new episode
+
+- Pull-to-refresh; clients cache feeds.
 - Open the private feed URL in a browser on the phone; it must return XML (not a
   login page).
 - Confirm **Base URL** is the LAN address the phone can reach, not
   `127.0.0.1`.
-- If the Mac's IP changed, update Settings → Base URL and refresh.
+- If the Mac's IP changed, update Settings → Base URL and re-add the feed.
 
 ### Audio will not seek / stalls
 
@@ -248,7 +258,7 @@ sqlite3 "$HOME/Library/Application Support/Un-Interupted/db.sqlite3" \
   "update podcasts set feed_token='new-secret' where slug='my-show';"
 ```
 
-Then re-subscribe in Overcast with the new URL.
+Then re-subscribe in Downcast/Apple Podcasts with the new URL.
 
 ---
 
