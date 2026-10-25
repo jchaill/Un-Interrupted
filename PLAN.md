@@ -49,6 +49,7 @@ The phone only talks to this Mac. Original feeds are never exposed.
 | Audio | Preserve source format when possible; MP3 uses the upstream stream-copy cutter, other containers use an ffmpeg re-encode fallback |
 | Language | Auto-detect from the feed, editable per show (`auto`/`fr`/`en`/…); Whisper and QA share it |
 | Ads | Default policy: remove clear sponsor/network reads and repeated blocks; flag ambiguous cuts for review |
+| LLM | Optional Ollama semantic pass (local or cloud); suggestions only, deterministic cutter/QA stay authoritative |
 | Port | `8090` by default; auto-detected LAN IP; both editable at setup/settings |
 | Storage | GUI-selected root; default `~/Podcasts/Un-Interupted`; relocatable from Settings |
 | Spelling | Folder/repo stays `Un-Interupted` |
@@ -150,7 +151,8 @@ episodes.
   conditional-GET validators, last error.
 - `episodes`: original GUID, metadata, original URL/path, clean filename/guid/
   duration/size, status, confidence, proposed/approved cuts, review JSON,
-  engine version, error, feed `published_at`, `clean_published_at`.
+  LLM provenance JSON, engine version, error, feed `published_at`,
+  `clean_published_at`.
 - `jobs`: type, state, podcast/episode, payload, priority, attempts,
   `run_after`, log path, progress.
 - `settings`: key/value (`last_cleanup_at`, `default_retention_days`).
@@ -174,8 +176,8 @@ is kept for RSS ordering and display.
    guard, never overwrite an existing original.
 3. **Transcribe** — `transcribe.sh` with the app model and podcast language.
 4. **Detect** — `detect_cuts.py` with per-podcast labels, show-stop, ad language;
-   build a review object with cut excerpts, labels, repeats, warnings, and a
-   confidence score.
+   optionally merge Ollama segment-ID proposals; build a review object with cut
+   excerpts, labels, repeats, LLM provenance, warnings, and a confidence score.
 5. **Review** — default stop. The UI lets the user edit/delete/add ranges,
    approve, skip, re-detect, or re-cut.
 6. **Cut** — upstream `cut.py` for MP3 (stream copy); generic ffmpeg
@@ -198,6 +200,29 @@ review only if:
 - and QA passes.
 
 Otherwise it stays in `awaiting_review`.
+
+### 6.1 Optional LLM-assisted detection (implemented)
+
+The deterministic detector remains the baseline and the final cutter/QA stays
+unchanged. An optional pass sends transcript *segments* (never audio) to an
+Ollama chat model and asks for JSON ranges by segment ID. It does not receive
+timestamps and never edits audio itself.
+
+- Default model: `deepseek-v4.1-flash:cloud` through the signed-in local Ollama
+  daemon (`http://127.0.0.1:11434`). A direct `https://ollama.com` endpoint plus
+  API key is also supported.
+- Chunked transcript with four-segment overlap; each chunk returns
+  `start_seg`/`end_seg`, `kind`, `brand`, `confidence`, `evidence`.
+- Guardrails: confidence threshold (default 0.72), minimum 3 s, in-range IDs,
+  show-stop regex, 25% removal cap, contiguous-range normalisation, overlap
+  de-duplication.
+- Merge policy: union with regex/repeat cuts, with provenance in
+  `review_json`. LLM-only cuts are warned and blocked from auto-publish until
+  they have been reviewed and corroborated.
+- Failure policy: Ollama errors are logged; the job still reaches review with
+  heuristic cuts. The LLM result is stored in `episodes.llm_json` for audit.
+- Sponsor memory / cross-episode repeats / few-shot feedback are still future
+  work; this first version intentionally does not promote brands automatically.
 
 ---
 
@@ -283,18 +308,20 @@ access and roughly 1 GB of free space.
 - LAN HTTP only; `secure=False` on the cookie. Put Tailscale/Caddy in front if
   exposing beyond the LAN, and set the base URL to the reachable address.
 - No CSRF tokens yet (single-user LAN app). Add them before any public exposure.
-- The app does not phone home; the only outbound calls are feed/artwork/model
-  downloads.
+- The app does not phone home. Outbound calls are feed/artwork/model downloads
+  and Ollama requests when AI ad detection is enabled. Cloud inference sends
+  transcript text; it is off by default.
 
 ---
 
 ## 11. Testing
 
-`tests/` (19 tests, no ffmpeg/whisper required):
+`tests/` (30 tests, no ffmpeg/whisper required):
 
 - slug/filename/duration/safe-join helpers
 - RSS/OPML parsing (including real-world fixture shape)
-- review confidence/warnings/excerpts
+- review confidence/warnings/excerpts, including LLM provenance and LLM-only caps
+- LLM JSON parsing, segment-ID mapping, guardrails, merging, ratio cap
 - feed XML validity, stable GUID/enclosure/duration, hand-dropped files, OPML
 - setup/login redirects, admin pages, podcast/review rendering
 - media Range/HEAD/ETag/304 and token rejection.
@@ -322,6 +349,8 @@ approve → cut → QA pass → publish → RSS item → Range 206.
 - **Podcast client acceptance**: subscribe in Overcast, refresh, stream, seek,
   background play, and check new-episode pickup.
 - **Ad policy**: defaults are conservative; per-show labels still need tuning.
+- **LLM calibration**: run on 10–20 labelled episodes before trusting LLM-only
+  cuts; cross-episode repeat detection and sponsor memory are not built yet.
 - **Non-MP3**: generic re-encode path is implemented but not exercised on a real
   m4a/aac feed yet.
 - **Notifications**: dashboard only.

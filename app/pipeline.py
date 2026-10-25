@@ -9,7 +9,7 @@ from typing import Any
 
 from . import config, db, feeds
 from .downloader import DownloadError, download_file
-from .engine import adapter
+from .engine import adapter, llm
 from .engine.adapter import EngineError, EngineMissing, probe_duration
 from .paths import episode_basename, extension_from_url
 from .review import build_review
@@ -309,6 +309,7 @@ def handle_detect(job: dict[str, Any], log: Path) -> None:
         raise JobFatal("Transcript is missing", episode_status="downloaded")
 
     _set_status(episode["id"], "detecting")
+    total = episode.get("duration_original") or probe_duration(source)
     try:
         labels_path = adapter.write_labels(dirs["base"], podcast)
     except EngineError as exc:
@@ -329,18 +330,54 @@ def handle_detect(job: dict[str, Any], log: Path) -> None:
         raise JobRetry(str(exc)) from exc
 
     _write_log(log, "\n--- detect report ---\n" + output[-12000:])
-    total = episode.get("duration_original") or probe_duration(source)
+
+    llm_result: dict[str, Any] | None = None
+    if llm.is_enabled(cfg):
+        opts = llm.settings(cfg)
+        _write_log(
+            log,
+            f"\n--- LLM ad detection ({opts['model']} via {llm.endpoint(opts['base_url'])}) ---",
+        )
+        try:
+            llm_result = llm.analyze(
+                podcast=podcast,
+                transcript=paths["transcript"],
+                total_duration=total,
+                cfg=cfg,
+                known_cuts=[
+                    {"start": row[0], "end": row[1]}
+                    for row in cuts
+                    if isinstance(row, (list, tuple)) and len(row) >= 2
+                ],
+            )
+            before = len(cuts)
+            cuts = llm.merge_cuts(cuts, llm_result.get("ads") or [], total_duration=total)
+            _write_log(
+                log,
+                f"LLM proposed {len(llm_result.get('ads') or [])} ad(s) across "
+                f"{llm_result.get('chunks', 0)} chunk(s); "
+                f"{len(llm_result.get('rejected') or [])} rejected; "
+                f"cut list {before} -> {len(cuts)}.",
+            )
+        except Exception as exc:  # The heuristic detector remains authoritative.
+            llm_result = llm.failed_result(str(exc), cfg)
+            _write_log(log, f"LLM detection failed; continuing with heuristic cuts: {exc}")
+    else:
+        _write_log(log, "LLM ad detection is disabled; using heuristic cuts only.")
+
     review = build_review(
         paths["transcript"],
         cuts,
         labels_json=podcast.get("labels_json"),
         total_duration=total,
+        llm_result=llm_result,
     )
     db.update_episode(
         episode["id"],
         cuts_json=json.dumps(cuts, ensure_ascii=False),
         approved_cuts_json=None,
         review_json=json.dumps(review, ensure_ascii=False),
+        llm_json=json.dumps(llm_result, ensure_ascii=False) if llm_result else None,
         confidence=review["confidence"],
         engine_version=adapter.engine_version(),
         status="awaiting_review",
@@ -367,6 +404,9 @@ def _maybe_auto_publish(
     if not podcast.get("auto_publish") or not cuts:
         return False
     if review.get("warnings") or float(review.get("confidence") or 0) < 0.80:
+        return False
+    if review.get("llm_only"):
+        _write_log(log, "Auto-publish skipped: the cut list contains LLM-only ranges.")
         return False
     if db.published_count(podcast["id"]) < 3:
         _write_log(log, "Auto-publish skipped: fewer than 3 published episodes.")

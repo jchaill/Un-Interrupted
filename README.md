@@ -5,8 +5,9 @@ feeds, downloads episodes, removes ads with a local Whisper-based pipeline, and
 publishes one clean, private RSS feed per show for Overcast (or any podcast
 client).
 
-No cloud service, no Docker, no phone-side setup. The audio never leaves your
-Mac except when your podcast app streams it over the LAN.
+No cloud service by default, no Docker, no phone-side setup. The audio never
+leaves your Mac except when your podcast app streams it over the LAN. An
+optional LLM pass can send transcript text to Ollama cloud if you enable it.
 
 **Status:** working MVP, end-to-end pipeline verified on an M1 Mac mini. See
 [PLAN.md](PLAN.md) for the design, decisions, and remaining work.
@@ -25,6 +26,8 @@ Mac except when your podcast app streams it over the LAN.
 - One private feed per podcast, with local artwork and HTTP Range streaming.
 - Per-show settings: language, ad labels, retention, poll interval,
   auto-process, auto-publish.
+- Optional **AI ad detection** through Ollama (local or cloud) for sponsor reads
+  that rotate over time and do not match the regex labels.
 - Browse older episodes and flag individual ones for processing.
 - Copy feed URL / QR code straight into Overcast.
 
@@ -129,6 +132,48 @@ cut, QA, publish).
 
 ---
 
+## Optional AI ad detection (Ollama)
+
+The heuristic detector is always the baseline. You can add a semantic pass that
+reads the timestamped transcript and proposes ad ranges by their *shape*
+(host-read, produced spot, promo code, free trial, CTA), not only by a fixed
+sponsor list. This is useful when a show swaps sponsors over time.
+
+1. Make sure Ollama is signed in to your Ollama account. The app uses the same
+   local daemon as Pi by default:
+
+   ```bash
+   ollama signin
+   ollama run deepseek-v4.1-flash:cloud "Reply with JSON only: {\"ok\":true}"
+   ```
+
+2. In **Settings → AI ad detection**, tick **Run LLM ad detection**, keep
+   `deepseek-v4.1-flash:cloud`, and click **Test Ollama connection**.
+
+3. Run **Re-detect** on an episode. The review screen shows an `LLM 91%` badge
+   and the brand next to each proposed range.
+
+Defaults:
+
+- `http://127.0.0.1:11434` uses the signed-in Ollama daemon; the model name keeps
+  the `:cloud` suffix.
+- `https://ollama.com` calls the hosted API directly. Set an
+  `UNINTERUPTED_LLM_API_KEY`/`OLLAMA_API_KEY` or paste a key in Settings; the
+  `:cloud` suffix is removed automatically.
+- LLM candidates below the confidence threshold, shorter than 3 s, outside the
+  transcript, overlapping the show re-entry regex, or removing more than 25% of
+  the episode are rejected.
+- LLM proposals are merged with regex/repeat cuts. An **LLM-only** cut always
+  gets a review warning and cannot auto-publish.
+- If Ollama is unreachable, the job still finishes with the heuristic cuts and
+  the review shows the LLM error.
+
+> **Privacy:** cloud inference sends transcript text to Ollama. Ollama states
+> that cloud prompts/responses are not used for training and are not stored as
+> content. Keep the feature off if that trade-off is not acceptable.
+
+---
+
 ## Retention
 
 Per podcast you can choose:
@@ -227,6 +272,9 @@ advanced setups:
 | `UNINTERUPTED_MODEL` / `WHISPER_MODEL` | Use a specific Whisper model file |
 | `UNINTERUPTED_NO_WORKER=1` | Run the web UI without the worker (dev) |
 | `UNINTERUPTED_LOG_LEVEL` | Uvicorn log level (default `info`) |
+| `UNINTERUPTED_LLM_MODEL` | Override the Ollama model (default `deepseek-v4.1-flash:cloud`) |
+| `UNINTERUPTED_LLM_BASE_URL` | Override the Ollama endpoint |
+| `UNINTERUPTED_LLM_API_KEY` / `OLLAMA_API_KEY` | API key for direct `ollama.com` access |
 
 `config.json` stores the stable session secret, password hash, storage root,
 base URL, port, and defaults. It is written atomically with mode `0600`.
@@ -242,8 +290,8 @@ base URL, port, and defaults. It is written atomically with mode `0600`.
   default is plain HTTP.
 - If you expose it beyond the LAN, put it behind Tailscale or an HTTPS reverse
   proxy, set the base URL accordingly, and add CSRF protection first.
-- No telemetry. Outbound requests are only feed/artwork downloads and the
-  first-run model/toolchain install.
+- No telemetry. Outbound requests are feed/artwork downloads, the first-run
+  model/toolchain install, and Ollama calls when AI ad detection is enabled.
 
 ---
 

@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from . import __version__, artwork, config, db, feeds, pipeline, rss, security, toolchain
-from .engine import adapter
+from .engine import adapter, llm
 from .media import serve_audio, serve_file
 from .paths import (
     human_duration,
@@ -212,11 +212,16 @@ def _review_for_episode(
         cuts = json.loads(episode.get("cuts_json") or "[]")
     except json.JSONDecodeError:
         cuts = []
+    try:
+        llm_result = json.loads(episode.get("llm_json") or "null")
+    except json.JSONDecodeError:
+        llm_result = None
     return build_review(
         transcript,
         cuts,
         labels_json=podcast.get("labels_json"),
         total_duration=episode.get("duration_original"),
+        llm_result=llm_result,
     )
 
 
@@ -740,7 +745,7 @@ def _resume_episode(cfg: dict[str, Any], podcast: dict[str, Any], episode: dict[
         db.enqueue_job("transcribe", podcast_id=podcast["id"], episode_id=episode["id"], priority=110, max_attempts=2)
         return "transcription"
     if not episode.get("cuts_json") and not episode.get("review_json"):
-        db.update_episode(episode["id"], status="queued")
+        db.update_episode(episode["id"], status="queued", llm_json=None)
         db.enqueue_job("detect", podcast_id=podcast["id"], episode_id=episode["id"], priority=90)
         return "detection"
     if episode.get("status") == "published":
@@ -753,7 +758,7 @@ def _resume_episode(cfg: dict[str, Any], podcast: dict[str, Any], episode: dict[
         db.update_episode(episode["id"], status="approved")
         db.enqueue_job("cut", podcast_id=podcast["id"], episode_id=episode["id"], priority=85)
         return "cutting"
-    db.update_episode(episode["id"], status="detecting")
+    db.update_episode(episode["id"], status="detecting", llm_json=None)
     db.enqueue_job("detect", podcast_id=podcast["id"], episode_id=episode["id"], priority=90)
     return "detection"
 
@@ -826,11 +831,16 @@ async def review_approve(request: Request, slug: str, episode_id: int):
             err="Add at least one cut range, or skip the episode.",
         )
     cuts.sort(key=lambda c: c[0])
+    try:
+        llm_result = json.loads(episode.get("llm_json") or "null")
+    except json.JSONDecodeError:
+        llm_result = None
     review = build_review(
         config.episode_dirs(cfg, slug)["work"] / f"tr_{pipeline.episode_tag(episode)}.json",
         cuts,
         labels_json=podcast.get("labels_json"),
         total_duration=total,
+        llm_result=llm_result,
     )
     db.update_episode(
         episode_id,
@@ -862,10 +872,22 @@ def review_redetect(request: Request, slug: str, episode_id: int):
     dirs = config.episode_dirs(cfg, podcast["slug"])
     tag = pipeline.episode_tag(episode)
     if (dirs["work"] / f"tr_{tag}.json").is_file():
-        db.update_episode(episode_id, status="detecting", approved_cuts_json=None, error_message=None)
+        db.update_episode(
+            episode_id,
+            status="detecting",
+            approved_cuts_json=None,
+            llm_json=None,
+            error_message=None,
+        )
         db.enqueue_job("detect", podcast_id=podcast["id"], episode_id=episode_id, priority=90)
     else:
-        db.update_episode(episode_id, status="queued", approved_cuts_json=None, error_message=None)
+        db.update_episode(
+            episode_id,
+            status="queued",
+            approved_cuts_json=None,
+            llm_json=None,
+            error_message=None,
+        )
         db.enqueue_job("transcribe", podcast_id=podcast["id"], episode_id=episode_id, priority=110, max_attempts=2)
     return _redirect(f"/podcasts/{slug}/episodes/{episode_id}/review", msg="Detection re-queued.")
 
@@ -1113,6 +1135,7 @@ def settings_page(request: Request):
         disk = shutil.disk_usage(root if root.exists() else Path.home())
     except OSError:
         disk = None
+    llm_opts = llm.settings(cfg)
     return _render(
         request,
         "settings.html",
@@ -1122,6 +1145,8 @@ def settings_page(request: Request):
         disk=disk,
         library_bytes=_dir_size(config.podcasts_root(cfg), limit_files=50000),
         podcast_count=len(db.list_podcasts()),
+        llm=llm_opts,
+        llm_api_key_set=bool(llm_opts["api_key"]),
         relocate_pending=any(
             job["type"] == "relocate" and job["state"] in {"queued", "running"}
             for job in db.list_jobs(limit=50, active_only=True)
@@ -1153,6 +1178,50 @@ async def settings_general(request: Request):
         }
     )
     return _redirect("/settings", msg="Settings saved. A port change needs a restart.")
+
+
+@app.post("/settings/llm")
+async def settings_llm(request: Request):
+    cfg, _session = security.require_admin(request)
+    form = await request.form()
+    model = str(form.get("llm_model") or "").strip()
+    base_url = str(form.get("llm_base_url") or "").strip().rstrip("/")
+    if not model:
+        return _redirect("/settings", err="Ollama model name is required.")
+    if not re.match(r"^https?://[^\s]+$", base_url):
+        return _redirect("/settings", err="Ollama base URL must start with http:// or https://")
+    try:
+        min_confidence = float(str(form.get("llm_min_confidence") or "0.72"))
+    except ValueError:
+        return _redirect("/settings", err="LLM confidence must be a number.")
+    min_confidence = max(0.1, min(0.99, min_confidence))
+    api_key = str(form.get("llm_api_key") or "").strip()
+    if form.get("llm_api_key_clear") is not None:
+        api_key = ""
+    elif not api_key:
+        api_key = str(cfg.get("llm_api_key") or "")
+    config.update_config(
+        llm_enabled=1 if form.get("llm_enabled") is not None else 0,
+        llm_model=model,
+        llm_base_url=base_url,
+        llm_api_key=api_key,
+        llm_min_confidence=min_confidence,
+    )
+    state = "enabled" if form.get("llm_enabled") is not None else "disabled"
+    return _redirect("/settings", msg=f"AI ad detection {state}.")
+
+
+@app.post("/settings/llm/test")
+def settings_llm_test(request: Request):
+    cfg, _session = security.require_admin(request)
+    try:
+        meta = llm.test_connection(cfg)
+    except llm.LLMError as exc:
+        return _redirect("/settings", err=f"Ollama test failed: {exc}")
+    return _redirect(
+        "/settings",
+        msg=f"Ollama replied with {meta.get('model')} in {meta.get('seconds')}s.",
+    )
 
 
 @app.post("/settings/password")

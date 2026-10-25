@@ -100,8 +100,28 @@ def test_podcast_and_review_pages_render(app_env):
         )
     )
     cuts = [[3, 9]]
+    llm_result = {
+        "ok": True,
+        "enabled": True,
+        "model": "test:cloud",
+        "ads": [
+            {
+                "start": 3.0,
+                "end": 9.0,
+                "brand": "Acme",
+                "kind": "host-read",
+                "confidence": 0.91,
+                "evidence": "Brought to you by Acme.",
+            }
+        ],
+        "chunks": 1,
+    }
     review_data = review.build_review(
-        transcript, cuts, labels_json=podcast["labels_json"], total_duration=30.0
+        transcript,
+        cuts,
+        labels_json=podcast["labels_json"],
+        total_duration=30.0,
+        llm_result=llm_result,
     )
     db.update_episode(
         episode["id"],
@@ -120,6 +140,7 @@ def test_podcast_and_review_pages_render(app_env):
     assert response.status_code == 200
     assert "Cut ranges" in response.text
     assert "Acme" in response.text
+    assert "LLM 91%" in response.text
 
 
 def test_media_range_and_token(app_env):
@@ -152,3 +173,68 @@ def test_media_range_and_token(app_env):
         f"/feed/{podcast['slug']}/media-token.xml",
         headers={"If-None-Match": feed.headers["etag"]},
     ).status_code == 304
+
+
+def test_settings_llm_saves_and_masks_key(app_env, monkeypatch):
+    client = _client(app_env)
+    response = client.post(
+        "/settings/llm",
+        data={
+            "llm_enabled": "on",
+            "llm_model": "deepseek-v4.1-flash:cloud",
+            "llm_base_url": "http://127.0.0.1:11434",
+            "llm_min_confidence": "0.8",
+            "llm_api_key": "secret-key",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    cfg = config.load_config()
+    assert cfg["llm_enabled"] == 1
+    assert cfg["llm_min_confidence"] == 0.8
+    assert cfg["llm_api_key"] == "secret-key"
+
+    page = client.get("/settings")
+    assert "AI ad detection" in page.text
+    assert "already set" in page.text
+    assert "secret-key" not in page.text
+
+    # Leaving the password blank keeps the stored key.
+    client.post(
+        "/settings/llm",
+        data={
+            "llm_enabled": "on",
+            "llm_model": "deepseek-v4.1-flash:cloud",
+            "llm_base_url": "http://127.0.0.1:11434",
+            "llm_min_confidence": "0.7",
+            "llm_api_key": "",
+        },
+        follow_redirects=False,
+    )
+    assert config.load_config()["llm_api_key"] == "secret-key"
+
+    client.post(
+        "/settings/llm",
+        data={
+            "llm_model": "deepseek-v4.1-flash:cloud",
+            "llm_base_url": "http://127.0.0.1:11434",
+            "llm_min_confidence": "0.7",
+            "llm_api_key_clear": "on",
+        },
+        follow_redirects=False,
+    )
+    cfg = config.load_config()
+    assert cfg["llm_enabled"] == 0
+    assert cfg["llm_api_key"] == ""
+
+
+def test_settings_llm_test_route(app_env, monkeypatch):
+    client = _client(app_env)
+
+    def fake_test(cfg):
+        return {"model": "deepseek-v4.1-flash", "seconds": 0.42}
+
+    monkeypatch.setattr(web.llm, "test_connection", fake_test)
+    response = client.post("/settings/llm/test", follow_redirects=False)
+    assert response.status_code == 303
+    assert "deepseek-v4.1-flash" in response.headers["location"]

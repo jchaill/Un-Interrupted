@@ -187,6 +187,27 @@ Edit `labels_json` on the podcast page. It is a JSON array of
 Then **Re-detect** on the episode. Start with one show and a few episodes; do
 not enable auto-publish until the ranges are consistently right.
 
+### AI ad detection does not run or finds nothing
+
+- Check **Settings → AI ad detection** is enabled and **Test Ollama
+  connection** succeeds.
+- The default endpoint `http://127.0.0.1:11434` uses the signed-in Ollama app.
+  Run `ollama signin` and make sure the Ollama menu-bar app is running.
+- Cloud models do not need `ollama pull`, but the model name must end in
+  `:cloud` when going through the local daemon. The default is
+  `deepseek-v4.1-flash:cloud`.
+- For a direct `https://ollama.com` endpoint, paste an API key in Settings (or
+  export `OLLAMA_API_KEY`) and drop the `:cloud` suffix; the app handles the
+  suffix automatically.
+- Open the job log. A failed LLM pass is non-fatal: the episode still reaches
+  review with heuristic cuts and the error is shown as a warning.
+- If Ollama replies but the JSON is invalid, the chunk is rejected. Check for a
+  model that follows JSON instructions; `deepseek-v4.1-flash:cloud` is the
+  default because it follows the segment-ID schema reliably.
+
+> Transcripts are sent to the cloud model. Keep AI detection off if that is not
+> acceptable; the local Whisper + regex/repeat pipeline still works without it.
+
 ---
 
 ## Podcast client / feed

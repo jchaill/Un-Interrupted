@@ -90,15 +90,42 @@ def _excerpt(
     return out
 
 
+def _llm_matches(
+    cut_start: float, cut_end: float | None, llm_ads: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    if cut_end is None:
+        cut_end = float("inf")
+    matches: list[dict[str, Any]] = []
+    for ad in llm_ads:
+        try:
+            ad_start = float(ad["start"])
+            ad_end = float(ad["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        overlap = max(0.0, min(cut_end, ad_end) - max(cut_start, ad_start))
+        shorter = max(0.01, min(cut_end - cut_start, ad_end - ad_start))
+        if overlap / shorter >= 0.35 or (ad_start - 1.0 <= cut_start and ad_end + 1.0 >= cut_end):
+            matches.append(ad)
+    return matches
+
+
 def build_review(
     transcript_path,
     cuts: list[list[float | None]],
     *,
     labels_json: str | None,
     total_duration: float | None,
+    llm_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     segments = transcript_segments(transcript_path)
     labels = _compile_labels(labels_json)
+    llm_ads = [
+        ad
+        for ad in ((llm_result or {}).get("ads") or [])
+        if isinstance(ad, dict)
+    ]
+    llm_error = str((llm_result or {}).get("error") or "").strip()
+    llm_partial = str((llm_result or {}).get("partial_error") or "").strip()
     normalized_cuts: list[dict[str, Any]] = []
     for raw in cuts:
         try:
@@ -135,6 +162,8 @@ def build_review(
 
     rows = []
     labels_hit = 0
+    llm_supported = 0
+    llm_only = 0
     warnings: list[str] = []
     removed = 0.0
     for index, cut in enumerate(normalized_cuts):
@@ -146,6 +175,16 @@ def build_review(
                 label_title = title
                 labels_hit += 1
                 break
+        matches = _llm_matches(start, end, llm_ads)
+        if matches:
+            llm_supported += 1
+        llm_confidence = max((float(ad.get("confidence") or 0) for ad in matches), default=0.0)
+        llm_brand = next((str(ad.get("brand") or "") for ad in matches if ad.get("brand")), "")
+        llm_kind = next((str(ad.get("kind") or "") for ad in matches if ad.get("kind")), "")
+        llm_evidence = next(
+            (str(ad.get("evidence") or "") for ad in matches if ad.get("evidence")), ""
+        )
+        sources = ["llm"] if matches else []
         duration = (end - start) if end is not None else (
             (total_duration - start) if total_duration else None
         )
@@ -158,7 +197,14 @@ def build_review(
             cut_warnings.append("Cut extends to the end of the episode.")
         if total_duration and start < 2.0 and index == 0:
             cut_warnings.append("Cut starts at the very beginning; confirm the cold open is not show content.")
-        if not label_title and repeat_groups[index] is None:
+        is_llm_only = bool(matches) and not label_title and repeat_groups[index] is None
+        if is_llm_only:
+            llm_only += 1
+            cut_warnings.append(
+                f"LLM-only cut ({(llm_brand or 'unknown brand')}, "
+                f"{llm_confidence:.0%}); listen before approving."
+            )
+        elif not label_title and repeat_groups[index] is None:
             cut_warnings.append("No sponsor label matched and this block is not a repeat; verify manually.")
         rows.append(
             {
@@ -168,6 +214,11 @@ def build_review(
                 "duration": round(duration, 1) if duration is not None else None,
                 "label": label_title,
                 "repeat_group": repeat_groups[index],
+                "sources": sources,
+                "llm_brand": llm_brand,
+                "llm_kind": llm_kind,
+                "llm_confidence": round(llm_confidence, 3) if matches else None,
+                "llm_evidence": llm_evidence,
                 "text": text[:1200],
                 "excerpt": _excerpt(segments, start, end),
                 "warnings": cut_warnings,
@@ -176,6 +227,14 @@ def build_review(
 
     ratio = (removed / total_duration) if total_duration and total_duration > 0 else 0.0
     repeat_count = sum(1 for g in repeat_groups if g is not None)
+    if llm_error:
+        warnings.append(f"LLM ad detection failed: {llm_error}")
+    elif llm_partial:
+        warnings.append(f"LLM ad detection partially failed: {llm_partial}")
+    if llm_only:
+        warnings.append(
+            f"{llm_only} LLM-only cut(s); review them before publishing."
+        )
     if not normalized_cuts:
         warnings.append(
             "No ad blocks were detected. Listen to the episode or inspect the transcript; "
@@ -185,10 +244,11 @@ def build_review(
         warnings.append(f"Removing {ratio * 100:.1f}% of the episode is unusually large; check the ranges.")
     if normalized_cuts and total_duration and ratio < 0.01:
         warnings.append(f"Removing only {ratio * 100:.2f}% is suspiciously small; a break may have been missed.")
-    if normalized_cuts and labels_hit == 0:
+    if normalized_cuts and labels_hit == 0 and llm_supported == 0:
         warnings.append("No calibrated sponsor label matched any block; only generic/repeat signals were used.")
     generic_only = all(
-        not row["label"] and row["repeat_group"] is None for row in rows
+        not row["label"] and row["repeat_group"] is None and "llm" not in row["sources"]
+        for row in rows
     )
     if rows and generic_only:
         warnings.append("Every block is unlabelled and non-repeating; review carefully before publishing.")
@@ -218,10 +278,14 @@ def build_review(
             confidence += 0.10
         if len(normalized_cuts) >= 2:
             confidence += 0.08
+        if llm_supported:
+            confidence += 0.05 * (llm_supported / len(normalized_cuts))
     else:
         confidence = 0.0
-    if normalized_cuts and labels_hit == 0 and repeat_count == 0:
+    if normalized_cuts and labels_hit == 0 and repeat_count == 0 and llm_supported == 0:
         confidence = min(confidence, 0.35)
+    if llm_only:
+        confidence = min(confidence, 0.70)
     if ratio > 0.25 or (normalized_cuts and ratio < 0.01):
         confidence = min(confidence, 0.50)
     if any("No sponsor label" in w for w in warnings):
@@ -237,6 +301,18 @@ def build_review(
         "n_cuts": len(normalized_cuts),
         "labels_hit": labels_hit,
         "repeated_blocks": repeat_count,
+        "llm_supported": llm_supported,
+        "llm_only": llm_only,
+        "llm": {
+            "enabled": bool((llm_result or {}).get("enabled")),
+            "ok": bool((llm_result or {}).get("ok")),
+            "model": (llm_result or {}).get("model"),
+            "ads": len(llm_ads),
+            "supported": llm_supported,
+            "only": llm_only,
+            "chunks": (llm_result or {}).get("chunks", 0),
+            "error": llm_error or llm_partial or None,
+        },
         "gap_warnings": len(gaps),
         "total_duration": round(total_duration, 2) if total_duration else None,
         "generated_at": datetime.now(timezone.utc).isoformat(),

@@ -68,6 +68,9 @@
         <div><span>Share</span><strong>{{ (review.ratio * 100) | round(1) }}%</strong></div>
         <div><span>Labels hit</span><strong>{{ review.labels_hit }}/{{ review.n_cuts }}</strong></div>
         <div><span>Repeats</span><strong>{{ review.repeated_blocks }}</strong></div>
+        {% if review.llm and review.llm.enabled %}
+        <div><span>LLM ads</span><strong>{{ review.llm.ads }}</strong><small>{{ review.llm.only }} only</small></div>
+        {% endif %}
       </div>
       {% if review.warnings %}
       <div class="warnings">
@@ -108,8 +111,9 @@
                 <td><input type="number" name="start" min="0" step="0.01" value="{{ cut.start }}" required></td>
                 <td><input type="number" name="end" min="0" step="0.01" value="{{ cut.end if cut.end is not none else '' }}"></td>
                 <td class="cut-detail">
-                  <div class="cut-label">{{ cut.label or 'Unlabelled' }}{% if cut.repeat_group is not none %} <span class="pill info">repeat</span>{% endif %}</div>
-                  <div class="muted cut-duration">{{ (cut.duration | duration) if cut.duration else '' }}</div>
+                  <div class="cut-label">{{ cut.label or 'Unlabelled' }}{% if cut.repeat_group is not none %} <span class="pill info">repeat</span>{% endif %}{% if cut.sources and 'llm' in cut.sources %} <span class="pill info">LLM {{ (cut.llm_confidence * 100) | round(0) | int }}%</span>{% endif %}</div>
+                  <div class="muted cut-duration">{{ (cut.duration | duration) if cut.duration else '' }}{% if cut.llm_brand %} · {{ cut.llm_brand }}{% if cut.llm_kind %} ({{ cut.llm_kind }}){% endif %}{% endif %}</div>
+                  {% if cut.llm_evidence %}<div class="cut-text muted">LLM: {{ cut.llm_evidence | strip_html(220) }}</div>{% endif %}
                   {% if cut.text %}<div class="cut-text muted">{{ cut.text | strip_html(220) }}</div>{% endif %}
                   {% if cut.excerpt %}
                   <details class="excerpt">

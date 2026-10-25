@@ -85,6 +85,54 @@
   </form>
 </section>
 
+<section class="card" id="ai-detection">
+  <div class="card-head">
+    <h2>AI ad detection</h2>
+    <span class="pill {{ 'ok' if llm.enabled else 'muted' }}">{{ 'enabled' if llm.enabled else 'off' }}</span>
+  </div>
+  <p class="muted small">Optional semantic pass through Ollama. It finds rotating or host-read sponsor breaks that the regex labels miss. The deterministic cutter and QA still make the final decision. <strong>Transcript text leaves this Mac</strong> when a cloud model is used; Ollama says cloud prompts are not used for training.</p>
+  <form method="post" action="/settings/llm" class="form-grid">
+    <label class="field checkbox-field span-2">
+      <input type="checkbox" name="llm_enabled" {{ 'checked' if llm.enabled else '' }}>
+      <span>Run LLM ad detection after the heuristic detector</span>
+      <small>Off by default. LLM-only cuts are always sent to review and never auto-published.</small>
+    </label>
+    <label class="field">
+      <span>Ollama model</span>
+      <input type="text" name="llm_model" value="{{ llm.model }}" placeholder="deepseek-v4.1-flash:cloud" spellcheck="false">
+      <small>Cloud models use the <code>:cloud</code> suffix through a signed-in local Ollama daemon.</small>
+    </label>
+    <label class="field">
+      <span>Minimum LLM confidence</span>
+      <input type="number" name="llm_min_confidence" min="0.1" max="0.99" step="0.01" value="{{ llm.min_confidence }}">
+      <small>Lower values find more possible ads but produce more review noise.</small>
+    </label>
+    <label class="field span-2">
+      <span>Ollama base URL</span>
+      <input type="url" name="llm_base_url" value="{{ llm.base_url }}" spellcheck="false">
+      <small><code>http://127.0.0.1:11434</code> uses the Ollama app you are signed in to (same setup as Pi). <code>https://ollama.com</code> calls the cloud API directly and needs an API key below.</small>
+    </label>
+    <label class="field span-2">
+      <span>Ollama API key {{ '(already set)' if llm_api_key_set else '(only needed for ollama.com)' }}</span>
+      <input type="password" name="llm_api_key" value="" placeholder="{{ '••••••••  leave blank to keep' if llm_api_key_set else 'optional' }}" autocomplete="off">
+      <small>Stored in <code>config.json</code> with mode 0600. The environment variables <code>OLLAMA_API_KEY</code> and <code>UNINTERUPTED_LLM_API_KEY</code> also work.</small>
+    </label>
+    {% if llm_api_key_set %}
+    <label class="field checkbox-field span-2">
+      <input type="checkbox" name="llm_api_key_clear">
+      <span>Clear the stored API key</span>
+    </label>
+    {% endif %}
+    <div class="span-2 form-actions">
+      <button class="btn primary" type="submit">Save AI settings</button>
+    </div>
+  </form>
+  <form method="post" action="/settings/llm/test" class="form-actions">
+    <button class="btn ghost" type="submit">Test Ollama connection</button>
+    <small class="muted">Save first; this tests the stored settings with a one-line JSON health check.</small>
+  </form>
+</section>
+
 <section class="card">
   <div class="card-head">
     <h2>Storage</h2>

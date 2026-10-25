@@ -75,6 +75,7 @@ def init_db() -> None:
             conn.execute("PRAGMA user_version = 1")
         # Future migrations go here, one block per version.
         _ensure_column(conn, "episodes", "clean_published_at", "TEXT")
+        _ensure_column(conn, "episodes", "llm_json", "TEXT")
         conn.execute(
             "INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)",
             ("default_retention_days", str(config.load_config().get("default_retention_days", 30))),
@@ -536,6 +537,7 @@ EPISODE_EDITABLE = {
     "cuts_json",
     "approved_cuts_json",
     "review_json",
+    "llm_json",
     "engine_version",
     "error_message",
     "downloaded_at",

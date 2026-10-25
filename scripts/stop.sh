@@ -1,6 +1,7 @@
 #!/bin/bash
 # Stop the background server started by scripts/start.sh or Un-Interupted.command.
 set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${UNINTERUPTED_PORT:-8090}"
 
 PIDS="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)"
@@ -25,6 +26,12 @@ fi
 
 echo "Stopping Un-Interupted (PID $PIDS)…"
 kill $PIDS 2>/dev/null || true
+
+# The engine starts Whisper/ffmpeg in their own session so a timeout can kill
+# the whole pipeline. That also means they survive when the app is stopped;
+# clean up only processes tied to this app's model or vendored scripts.
+pkill -f "$HOME/Library/Application Support/Un-Interupted/models/ggml-" 2>/dev/null || true
+pkill -f "$ROOT/app/engine/upstream/scripts" 2>/dev/null || true
 for _ in $(seq 1 20); do
   if ! lsof -tiTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
     echo "Stopped."
