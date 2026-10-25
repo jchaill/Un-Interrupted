@@ -92,11 +92,46 @@
   </div>
   <p class="muted small">Every detection job runs a semantic pass through Ollama after the regex/repeat detector. This is how rotating, host-read, and new sponsor breaks are caught on each episode. The deterministic cutter and QA still make the final decision. <strong>Transcript text leaves this Mac</strong> when a cloud model is used; Ollama says cloud prompts are not used for training.</p>
   <p class="muted small">If Ollama is unreachable, the episode still reaches review with heuristic cuts and an LLM error warning. LLM-only cuts are always sent to review and never auto-published.</p>
+
+  <div class="toolchain-grid">
+    <div class="tool-row">
+      <span class="dot {{ 'ok' if llm_discovery.installed else 'muted' }}"></span>
+      <div><strong>Ollama install</strong><small class="muted">{{ llm_discovery.binary or 'not found on PATH' }}</small></div>
+      <span class="tool-status">{{ 'installed' if llm_discovery.installed else 'missing' }}</span>
+    </div>
+    <div class="tool-row">
+      <span class="dot {{ 'ok' if llm_discovery.daemon_ok else 'muted' }}"></span>
+      <div><strong>Ollama daemon</strong><small class="muted small-break">{{ llm_discovery.endpoint }}</small></div>
+      <span class="tool-status">{{ 'answering' if llm_discovery.daemon_ok else 'unreachable' }}</span>
+    </div>
+  </div>
+  {% if llm_discovery.error %}
+  <div class="flash bad"><strong>Ollama check failed:</strong> {{ llm_discovery.error }}</div>
+  {% endif %}
+  {% for hint in llm_discovery.hints %}
+  <div class="flash">{{ hint }}</div>
+  {% endfor %}
+  <form method="post" action="/settings/llm/check" class="form-actions">
+    <button class="btn ghost" type="submit">Check LLM install</button>
+    <small class="muted">Re-reads the configured Ollama endpoint and refreshes the model list. Save the base URL first if you changed it.</small>
+  </form>
+
   <form method="post" action="/settings/llm" class="form-grid">
     <label class="field">
       <span>Ollama model</span>
+      {% if llm_discovery.models %}
+      <select name="llm_model">
+        {% for model in llm_discovery.models %}
+        <option value="{{ model.name }}" {{ 'selected' if model.selected else '' }}>
+          {{ model.name }}{% if model.cloud %} (cloud){% endif %}{% if model.current %} — current{% endif %}{% if model.size and not model.cloud %} · {{ model.size | human_size }}{% endif %}
+        </option>
+        {% endfor %}
+      </select>
+      <small>These are the models Ollama reported. Run <code>ollama run &lt;model&gt;</code> once in Terminal to add another, then click Check again.</small>
+      {% else %}
       <input type="text" name="llm_model" value="{{ llm.model }}" placeholder="deepseek-v4.1-flash:cloud" spellcheck="false">
-      <small>Cloud models use the <code>:cloud</code> suffix through a signed-in local Ollama daemon.</small>
+      <small>No models were reported. Run <code>ollama run &lt;model&gt;</code> once in Terminal, then click Check again. For a cloud model, run <code>ollama signin</code> first.</small>
+      {% endif %}
     </label>
     <label class="field">
       <span>Minimum LLM confidence</span>

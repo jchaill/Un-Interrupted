@@ -211,6 +211,9 @@ timestamps and never edits audio itself.
 - Default model: `deepseek-v4.1-flash:cloud` through the signed-in local Ollama
   daemon (`http://127.0.0.1:11434`). A direct `https://ollama.com` endpoint plus
   API key is also supported.
+- Settings **Check LLM install** reports the Ollama binary/daemon status and
+  lists models from `/api/tags`; if none exist it explains the missing
+  `ollama run <model>` step.
 - Chunked transcript with four-segment overlap; each chunk returns
   `start_seg`/`end_seg`, `kind`, `brand`, `confidence`, `evidence`.
 - Guardrails: confidence threshold (default 0.72), minimum 3 s, in-range IDs,
@@ -316,7 +319,7 @@ access and roughly 1 GB of free space.
 
 ## 11. Testing
 
-`tests/` (30 tests, no ffmpeg/whisper required):
+`tests/` (35 tests, no ffmpeg/whisper required):
 
 - slug/filename/duration/safe-join helpers
 - RSS/OPML parsing (including real-world fixture shape)

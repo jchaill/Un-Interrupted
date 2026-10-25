@@ -1136,6 +1136,21 @@ def settings_page(request: Request):
     except OSError:
         disk = None
     llm_opts = llm.settings(cfg)
+    try:
+        llm_discovery = llm.discover(cfg, timeout=3.0)
+    except Exception as exc:  # The settings page must still render.
+        llm_discovery = {
+            "ok": False,
+            "installed": False,
+            "binary": None,
+            "daemon_ok": False,
+            "endpoint": llm.tags_endpoint(llm_opts["base_url"]),
+            "current": llm_opts["model"],
+            "models": [],
+            "error": str(exc),
+            "hints": [],
+            "cloud": "ollama.com" in llm_opts["base_url"],
+        }
     return _render(
         request,
         "settings.html",
@@ -1146,6 +1161,7 @@ def settings_page(request: Request):
         library_bytes=_dir_size(config.podcasts_root(cfg), limit_files=50000),
         podcast_count=len(db.list_podcasts()),
         llm=llm_opts,
+        llm_discovery=llm_discovery,
         llm_api_key_set=bool(llm_opts["api_key"]),
         relocate_pending=any(
             job["type"] == "relocate" and job["state"] in {"queued", "running"}
@@ -1178,6 +1194,22 @@ async def settings_general(request: Request):
         }
     )
     return _redirect("/settings", msg="Settings saved. A port change needs a restart.")
+
+
+@app.post("/settings/llm/check")
+def settings_llm_check(request: Request):
+    cfg, _session = security.require_admin(request)
+    try:
+        found = llm.discover(cfg, timeout=3.0)
+    except Exception as exc:
+        return _redirect("/settings", err=f"Ollama check failed: {exc}")
+    if found["ok"]:
+        return _redirect(
+            "/settings",
+            msg=f"Ollama is ready; {len(found['models'])} model(s) available.",
+        )
+    reason = found.get("error") or "the Ollama daemon did not answer"
+    return _redirect("/settings", err=f"Ollama check failed: {reason}")
 
 
 @app.post("/settings/llm")

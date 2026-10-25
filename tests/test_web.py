@@ -16,6 +16,26 @@ def _client(app_env):
     return client
 
 
+def _stub_llm_discovery(monkeypatch, models=None):
+    models = models or []
+
+    def fake_discover(cfg, *, timeout=0):
+        return {
+            "ok": True,
+            "installed": True,
+            "binary": "/opt/homebrew/bin/ollama",
+            "daemon_ok": True,
+            "endpoint": "http://127.0.0.1:11434/api/tags",
+            "current": "test:cloud",
+            "models": models,
+            "error": None,
+            "hints": [],
+            "cloud": False,
+        }
+
+    monkeypatch.setattr(web.llm, "discover", fake_discover)
+
+
 def test_setup_is_required_without_config(tmp_path, monkeypatch):
     monkeypatch.setenv("UNINTERUPTED_HOME", str(tmp_path / "fresh-home"))
     monkeypatch.setenv("UNINTERUPTED_BASE_URL", "http://testserver:8090")
@@ -51,7 +71,8 @@ def test_setup_post_creates_config(tmp_path, monkeypatch, app_env):
         assert config.load_config()["setup_complete"] is True
 
 
-def test_admin_pages_render(app_env):
+def test_admin_pages_render(app_env, monkeypatch):
+    _stub_llm_discovery(monkeypatch)
     client = _client(app_env)
     for path in ["/", "/podcasts/add", "/podcasts/import", "/settings", "/queue"]:
         response = client.get(path)
@@ -176,6 +197,18 @@ def test_media_range_and_token(app_env):
 
 
 def test_settings_llm_saves_and_masks_key(app_env, monkeypatch):
+    _stub_llm_discovery(
+        monkeypatch,
+        models=[
+            {
+                "name": "deepseek-v4.1-flash:cloud",
+                "selected": True,
+                "current": False,
+                "listed": True,
+                "cloud": True,
+            }
+        ],
+    )
     client = _client(app_env)
     response = client.post(
         "/settings/llm",
@@ -198,6 +231,8 @@ def test_settings_llm_saves_and_masks_key(app_env, monkeypatch):
     assert "AI ad detection" in page.text
     assert "already set" in page.text
     assert "secret-key" not in page.text
+    assert "Check LLM install" in page.text
+    assert 'value="deepseek-v4.1-flash:cloud"' in page.text
 
     # Leaving the password blank keeps the stored key.
     client.post(
@@ -229,6 +264,7 @@ def test_settings_llm_saves_and_masks_key(app_env, monkeypatch):
 
 
 def test_settings_llm_test_route(app_env, monkeypatch):
+    _stub_llm_discovery(monkeypatch)
     client = _client(app_env)
 
     def fake_test(cfg):
@@ -238,3 +274,46 @@ def test_settings_llm_test_route(app_env, monkeypatch):
     response = client.post("/settings/llm/test", follow_redirects=False)
     assert response.status_code == 303
     assert "deepseek-v4.1-flash" in response.headers["location"]
+
+
+def test_settings_llm_check_route(app_env, monkeypatch):
+    _stub_llm_discovery(
+        monkeypatch,
+        models=[
+            {
+                "name": "llama3.2",
+                "selected": False,
+                "current": False,
+                "listed": True,
+                "cloud": False,
+            }
+        ],
+    )
+    client = _client(app_env)
+    response = client.post("/settings/llm/check", follow_redirects=False)
+    assert response.status_code == 303
+    assert "Ollama+is+ready" in response.headers["location"]
+
+
+def test_settings_llm_install_hints(app_env, monkeypatch):
+    def fake_discover(cfg, *, timeout=0):
+        return {
+            "ok": False,
+            "installed": False,
+            "binary": None,
+            "daemon_ok": False,
+            "endpoint": "http://127.0.0.1:11434/api/tags",
+            "current": "test:cloud",
+            "models": [],
+            "error": None,
+            "hints": [
+                "Ollama is not installed. Install the Ollama app, or run `brew install ollama` in Terminal."
+            ],
+            "cloud": False,
+        }
+
+    monkeypatch.setattr(web.llm, "discover", fake_discover)
+    client = _client(app_env)
+    page = client.get("/settings")
+    assert "Ollama is not installed" in page.text
+    assert "brew install ollama" in page.text

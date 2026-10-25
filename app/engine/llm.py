@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import time
 import urllib.error
 import urllib.request
@@ -122,6 +123,15 @@ def endpoint(base_url: str) -> str:
     return base + "/api/chat"
 
 
+def tags_endpoint(base_url: str) -> str:
+    base = base_url.rstrip("/")
+    if base.endswith("/api/chat"):
+        return base[: -len("/chat")] + "/tags"
+    if base.endswith("/api"):
+        return base + "/tags"
+    return base + "/api/tags"
+
+
 def api_model(model: str | None, base_url: str) -> str:
     name = (model or DEFAULT_MODEL).strip()
     # The hosted API uses "deepseek-v4.1-flash"; the local signed-in daemon
@@ -156,6 +166,139 @@ def _post_json(url: str, payload: dict[str, Any], api_key: str, timeout: float) 
     if data.get("error"):
         raise LLMError(str(data["error"])[:800])
     return data
+
+
+def _get_json(url: str, api_key: str, timeout: float) -> dict[str, Any]:
+    headers = {"Accept": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:500]
+        raise LLMError(f"Ollama returned HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise LLMError(f"Cannot reach Ollama at {url}: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise LLMError(f"Ollama request timed out after {int(timeout)}s") from exc
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise LLMError(f"Ollama returned invalid JSON: {raw[:500]}") from exc
+    if not isinstance(data, dict):
+        raise LLMError("Ollama returned an unexpected reply")
+    if data.get("error"):
+        raise LLMError(str(data["error"])[:500])
+    return data
+
+
+def discover(cfg: dict[str, Any] | None = None, *, timeout: float = 2.0) -> dict[str, Any]:
+    """Check the Ollama binary, daemon, and model list for the settings page."""
+    opts = settings(cfg)
+    base_url = opts["base_url"]
+    current = opts["model"]
+    current_name = api_model(current, base_url)
+    binary = shutil.which("ollama")
+    if not binary:
+        for candidate in (
+            "/opt/homebrew/bin/ollama",
+            "/usr/local/bin/ollama",
+            "/Applications/Ollama.app/Contents/Resources/ollama",
+        ):
+            if Path(candidate).is_file():
+                binary = candidate
+                break
+    url = tags_endpoint(base_url)
+    result: dict[str, Any] = {
+        "ok": False,
+        "installed": bool(binary),
+        "binary": binary,
+        "daemon_ok": False,
+        "endpoint": url,
+        "current": current,
+        "models": [],
+        "error": None,
+        "hints": [],
+        "cloud": "ollama.com" in base_url,
+    }
+    if "ollama.com" in base_url and not opts["api_key"]:
+        result["error"] = (
+            "A direct ollama.com endpoint needs an API key. Add one below, or use "
+            "the signed-in local daemon at http://127.0.0.1:11434."
+        )
+    else:
+        try:
+            data = _get_json(url, opts["api_key"], timeout)
+        except LLMError as exc:
+            result["error"] = str(exc)
+        else:
+            result["daemon_ok"] = True
+            result["ok"] = True
+            rows = data.get("models") or []
+            names: set[str] = set()
+            for row in rows if isinstance(rows, list) else []:
+                if not isinstance(row, dict):
+                    continue
+                name = str(row.get("name") or row.get("model") or "").strip()
+                if not name or name in names:
+                    continue
+                names.add(name)
+                details = row.get("details") if isinstance(row.get("details"), dict) else {}
+                result["models"].append(
+                    {
+                        "name": name,
+                        "size": row.get("size"),
+                        "modified_at": row.get("modified_at"),
+                        "parameter_size": details.get("parameter_size") or "",
+                        "capabilities": row.get("capabilities") or [],
+                        "cloud": (
+                            bool(row.get("remote_model"))
+                            or name.endswith(":cloud")
+                            or "ollama.com" in base_url
+                        ),
+                    }
+                )
+            result["models"].sort(key=lambda item: (not item["cloud"], item["name"].lower()))
+            if names and current_name not in names:
+                result["models"].insert(
+                    0,
+                    {
+                        "name": current if "ollama.com" in base_url else current,
+                        "current": True,
+                        "listed": False,
+                        "cloud": current_name.endswith(":cloud") or "ollama.com" in base_url,
+                    },
+                )
+            for model in result["models"]:
+                model["selected"] = str(model["name"]) in {current, current_name}
+                model.setdefault("listed", True)
+                model.setdefault("current", False)
+    if not result["installed"]:
+        result["hints"].append(
+            "Ollama is not installed. Install the Ollama app, or run "
+            "`brew install ollama` in Terminal."
+        )
+    if result["installed"] and not result["daemon_ok"] and not result["cloud"]:
+        result["hints"].append(
+            "Ollama is installed but its daemon is not answering. Open the Ollama "
+            "app, or run `ollama serve`, then check the base URL."
+        )
+    if result["daemon_ok"] and not result["models"]:
+        result["hints"].append(
+            "Ollama is running but has no models. Run `ollama run <model>` once in "
+            "Terminal to make a model available (for example "
+            "`ollama run llama3.2`, or `ollama run deepseek-v4.1-flash:cloud` "
+            "after `ollama signin`)."
+        )
+    if result["daemon_ok"] and result["models"]:
+        result["hints"].append(
+            "Only models that have been run or pulled appear in this list. Run "
+            "`ollama run <model>` once, then click Check again. Cloud models also "
+            "need `ollama signin`."
+        )
+    return result
 
 
 def _chat(

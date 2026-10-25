@@ -321,3 +321,72 @@ def test_refine_rejects_a_range_that_swallows_another_ad(monkeypatch):
     )
     assert cleaned == []
     assert error == "no valid range after refinement"
+
+
+def test_discover_lists_models_and_keeps_current(monkeypatch):
+    monkeypatch.setattr(llm.shutil, "which", lambda name: "/opt/homebrew/bin/ollama")
+    monkeypatch.setattr(
+        llm,
+        "_get_json",
+        lambda url, api_key, timeout: {
+            "models": [
+                {
+                    "name": "deepseek-v4-pro:cloud",
+                    "remote_model": "deepseek-v4-pro",
+                    "size": 344,
+                    "details": {"parameter_size": ""},
+                    "capabilities": ["completion", "thinking"],
+                }
+            ]
+        },
+    )
+    found = llm.discover(
+        {
+            "llm_model": "deepseek-v4.1-flash:cloud",
+            "llm_base_url": "http://127.0.0.1:11434",
+        },
+        timeout=1,
+    )
+    assert found["ok"] is True
+    assert found["installed"] is True
+    assert found["daemon_ok"] is True
+    assert found["models"][0]["name"] == "deepseek-v4.1-flash:cloud"
+    assert found["models"][0]["current"] is True
+    assert found["models"][0]["selected"] is True
+    assert found["models"][1]["name"] == "deepseek-v4-pro:cloud"
+    assert found["models"][1]["cloud"] is True
+
+
+def test_discover_explains_ollama_run_when_no_models(monkeypatch):
+    monkeypatch.setattr(llm.shutil, "which", lambda name: "/opt/homebrew/bin/ollama")
+    monkeypatch.setattr(llm, "_get_json", lambda url, api_key, timeout: {"models": []})
+    found = llm.discover(
+        {
+            "llm_model": "deepseek-v4.1-flash:cloud",
+            "llm_base_url": "http://127.0.0.1:11434",
+        },
+        timeout=1,
+    )
+    assert found["ok"] is True
+    assert found["models"] == []
+    assert any("ollama run" in hint for hint in found["hints"])
+
+
+def test_discover_explains_unreachable_daemon(monkeypatch):
+    monkeypatch.setattr(llm.shutil, "which", lambda name: "/opt/homebrew/bin/ollama")
+
+    def fail(url, api_key, timeout):
+        raise llm.LLMError("Cannot reach Ollama")
+
+    monkeypatch.setattr(llm, "_get_json", fail)
+    found = llm.discover(
+        {
+            "llm_model": "deepseek-v4.1-flash:cloud",
+            "llm_base_url": "http://127.0.0.1:11434",
+        },
+        timeout=1,
+    )
+    assert found["ok"] is False
+    assert found["installed"] is True
+    assert found["daemon_ok"] is False
+    assert any("daemon is not answering" in hint for hint in found["hints"])

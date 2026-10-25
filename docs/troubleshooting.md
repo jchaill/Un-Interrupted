@@ -189,10 +189,16 @@ not enable auto-publish until the ranges are consistently right.
 
 ### AI ad detection does not run or finds nothing
 
-- Check **Settings → AI ad detection → Test Ollama connection** succeeds. The
-  pass is always on; there is no enable toggle.
+- Check **Settings → AI ad detection → Check LLM install**. The pass is always
+  on; there is no enable toggle.
+- If the card says Ollama is missing, install the Ollama app or run
+  `brew install ollama`.
+- If the card says the daemon is unreachable, open the Ollama app or run
+  `ollama serve`, then check the base URL.
+- If the model list is empty, run `ollama run <model>` once in Terminal. For a
+  cloud model, run `ollama signin` first. Only models that have been run or
+  pulled appear in the list.
 - The default endpoint `http://127.0.0.1:11434` uses the signed-in Ollama app.
-  Run `ollama signin` and make sure the Ollama menu-bar app is running.
 - Cloud models do not need `ollama pull`, but the model name must end in
   `:cloud` when going through the local daemon. The default is
   `deepseek-v4.1-flash:cloud`.

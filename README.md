@@ -141,24 +141,35 @@ their *shape* (host-read, produced spot, promo code, free trial, CTA), not only
 by a fixed sponsor list. This runs on every episode because sponsors rotate and
 new reads appear without a regex update.
 
-1. Make sure Ollama is signed in to your Ollama account. The app uses the same
-   local daemon as Pi by default:
+1. Install the Ollama app (or `brew install ollama`) and make sure it is
+   running. For cloud models, sign in once:
 
    ```bash
    ollama signin
-   ollama run deepseek-v4.1-flash:cloud "Reply with JSON only: {\"ok\":true}"
    ```
 
-2. In **Settings → AI ad detection**, keep `deepseek-v4.1-flash:cloud` and
-   click **Test Ollama connection**. There is no enable toggle: the pass runs
-   after every heuristic detection.
+2. In **Settings → AI ad detection**, click **Check LLM install**. The card
+   reports whether the Ollama binary and daemon are available, then lists the
+   models Ollama knows about. Pick the model from the list and save. There is no
+   enable toggle: the pass runs after every heuristic detection.
 
-3. Open an episode review. The screen shows an `LLM 91%` badge and the brand
+3. If the list is empty, Ollama is running but no model has been made available
+   yet. Run one once in Terminal, then click **Check LLM install** again:
+
+   ```bash
+   ollama run llama3.2                  # a local model
+   ollama run deepseek-v4.1-flash:cloud # a cloud model after ollama signin
+   ```
+
+4. Open an episode review. The screen shows an `LLM 91%` badge and the brand
    next to each proposed range. **Re-detect** re-runs both passes on an existing
    transcript.
 
 Defaults:
 
+- If Ollama is not installed, the card says so and points to the Ollama app or
+  `brew install ollama`. If the daemon is unreachable, start the app or run
+  `ollama serve`.
 - `http://127.0.0.1:11434` uses the signed-in Ollama daemon; the model name keeps
   the `:cloud` suffix.
 - `https://ollama.com` calls the hosted API directly. Set an
