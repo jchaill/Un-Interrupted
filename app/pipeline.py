@@ -260,7 +260,7 @@ def handle_transcribe(job: dict[str, Any], log: Path) -> None:
                     "detect",
                     podcast_id=podcast["id"],
                     episode_id=episode["id"],
-                    priority=120,
+                    priority=90,
                 )
                 return
         except (OSError, json.JSONDecodeError):
@@ -292,7 +292,7 @@ def handle_transcribe(job: dict[str, Any], log: Path) -> None:
         "detect",
         podcast_id=podcast["id"],
         episode_id=episode["id"],
-        priority=120,
+        priority=90,
     )
 
 
@@ -377,7 +377,7 @@ def _maybe_auto_publish(
         status="approved",
         error_message=None,
     )
-    db.enqueue_job("cut", podcast_id=podcast["id"], episode_id=episode_id, priority=130)
+    db.enqueue_job("cut", podcast_id=podcast["id"], episode_id=episode_id, priority=85)
     _write_log(log, "Auto-publish approved this episode.")
     return True
 
@@ -455,7 +455,7 @@ def handle_cut(job: dict[str, Any], log: Path) -> None:
         status="qa",
         error_message=None,
     )
-    db.enqueue_job("qa", podcast_id=podcast["id"], episode_id=episode["id"], priority=140)
+    db.enqueue_job("qa", podcast_id=podcast["id"], episode_id=episode["id"], priority=88)
 
 
 def handle_qa(job: dict[str, Any], log: Path) -> None:
@@ -505,7 +505,7 @@ def handle_qa(job: dict[str, Any], log: Path) -> None:
         raise JobQAFailed(message, episode_status="qa_failed")
 
     db.update_episode(episode["id"], status="ready_publish", error_message=None)
-    db.enqueue_job("publish", podcast_id=podcast["id"], episode_id=episode["id"], priority=150)
+    db.enqueue_job("publish", podcast_id=podcast["id"], episode_id=episode["id"], priority=80)
 
 
 def handle_publish(job: dict[str, Any], log: Path) -> None:

@@ -458,7 +458,7 @@ def upsert_feed_episode(podcast_id: int, item: dict[str, Any]) -> tuple[dict[str
                 UPDATE episodes SET
                     title=?, description=?, content_html=?, link=?, comments_url=?,
                     published_at=?, original_url=?, enclosure_type=?,
-                    enclosure_length=?, duration_original=COALESCE(?, duration_original),
+                    enclosure_length=?, duration_original=COALESCE(duration_original, ?),
                     item_json=?, updated_at=?
                 WHERE id=?
                 """,

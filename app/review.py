@@ -111,6 +111,8 @@ def build_review(
         if total_duration is not None:
             start = min(start, total_duration)
             end = min(end, total_duration) if end is not None else None
+        if end is not None and end <= start:
+            continue
         normalized_cuts.append({"start": start, "end": end})
     normalized_cuts.sort(key=lambda c: c["start"])
 

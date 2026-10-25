@@ -33,6 +33,13 @@
 <div class="banner bad"><div><strong>Feed error:</strong> {{ podcast.last_error | strip_html(300) }}</div></div>
 {% endif %}
 
+{% if counts.get('published', 0) == 0 %}
+<div class="banner warn">
+  <div><strong>This private feed is empty.</strong> Podcast apps may reject a feed until it has at least one published episode. Approve an episode in Review to publish the first item.</div>
+  <a class="btn small" href="/podcasts/{{ podcast.slug }}?filter=review">Go to Review</a>
+</div>
+{% endif %}
+
 <details class="card settings-card">
   <summary><strong>Podcast settings</strong><span class="muted"> · ad calibration, retention, polling</span></summary>
   <form method="post" action="/podcasts/{{ podcast.slug }}/settings" class="form-grid">

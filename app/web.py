@@ -741,20 +741,20 @@ def _resume_episode(cfg: dict[str, Any], podcast: dict[str, Any], episode: dict[
         return "transcription"
     if not episode.get("cuts_json") and not episode.get("review_json"):
         db.update_episode(episode["id"], status="queued")
-        db.enqueue_job("detect", podcast_id=podcast["id"], episode_id=episode["id"], priority=120)
+        db.enqueue_job("detect", podcast_id=podcast["id"], episode_id=episode["id"], priority=90)
         return "detection"
     if episode.get("status") == "published":
         return "nothing (already published)"
     if episode.get("approved_cuts_json"):
         if clean.is_file():
             db.update_episode(episode["id"], status="qa")
-            db.enqueue_job("qa", podcast_id=podcast["id"], episode_id=episode["id"], priority=140)
+            db.enqueue_job("qa", podcast_id=podcast["id"], episode_id=episode["id"], priority=88)
             return "QA"
         db.update_episode(episode["id"], status="approved")
-        db.enqueue_job("cut", podcast_id=podcast["id"], episode_id=episode["id"], priority=130)
+        db.enqueue_job("cut", podcast_id=podcast["id"], episode_id=episode["id"], priority=85)
         return "cutting"
     db.update_episode(episode["id"], status="detecting")
-    db.enqueue_job("detect", podcast_id=podcast["id"], episode_id=episode["id"], priority=120)
+    db.enqueue_job("detect", podcast_id=podcast["id"], episode_id=episode["id"], priority=90)
     return "detection"
 
 
@@ -841,7 +841,7 @@ async def review_approve(request: Request, slug: str, episode_id: int):
         status="approved",
         error_message=None,
     )
-    db.enqueue_job("cut", podcast_id=podcast["id"], episode_id=episode_id, priority=130)
+    db.enqueue_job("cut", podcast_id=podcast["id"], episode_id=episode_id, priority=85)
     return _redirect(f"/podcasts/{slug}", msg="Cut approved and queued.")
 
 
@@ -863,7 +863,7 @@ def review_redetect(request: Request, slug: str, episode_id: int):
     tag = pipeline.episode_tag(episode)
     if (dirs["work"] / f"tr_{tag}.json").is_file():
         db.update_episode(episode_id, status="detecting", approved_cuts_json=None, error_message=None)
-        db.enqueue_job("detect", podcast_id=podcast["id"], episode_id=episode_id, priority=120)
+        db.enqueue_job("detect", podcast_id=podcast["id"], episode_id=episode_id, priority=90)
     else:
         db.update_episode(episode_id, status="queued", approved_cuts_json=None, error_message=None)
         db.enqueue_job("transcribe", podcast_id=podcast["id"], episode_id=episode_id, priority=110, max_attempts=2)
@@ -878,7 +878,7 @@ def review_recut(request: Request, slug: str, episode_id: int):
     if not episode.get("approved_cuts_json"):
         return _redirect(f"/podcasts/{slug}/episodes/{episode_id}/review", err="Approve cut ranges first.")
     db.update_episode(episode_id, status="approved", error_message=None)
-    db.enqueue_job("cut", podcast_id=podcast["id"], episode_id=episode_id, priority=130)
+    db.enqueue_job("cut", podcast_id=podcast["id"], episode_id=episode_id, priority=85)
     return _redirect(f"/podcasts/{slug}/episodes/{episode_id}/review", msg="Re-cut queued.")
 
 
