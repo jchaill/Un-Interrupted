@@ -184,8 +184,9 @@ Edit `labels_json` on the podcast page. It is a JSON array of
 ]
 ```
 
-Then **Re-detect** on the episode. Start with one show and a few episodes; do
-not enable auto-publish until the ranges are consistently right.
+Then **Re-detect** on the episode. Start with one show and a few episodes.
+Auto-publish now publishes regardless of confidence or warnings, so leave it
+off if you want to inspect cuts before they reach the feed.
 
 ### AI ad detection does not run or finds nothing
 

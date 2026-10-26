@@ -43,7 +43,7 @@ The phone only talks to this Mac. Original feeds are never exposed.
 | Auth | One admin password + per-podcast feed/media tokens; no multi-user |
 | Feed shape | One private feed per podcast; **no combined feed**; admin-only OPML export |
 | Review | Download → transcribe → detect → **AWAITING REVIEW**; publish only after approval by default |
-| Auto-publish | Opt-in per podcast, gated on history/confidence/warnings |
+| Auto-publish | Opt-in per podcast; publishes regardless of confidence/warnings/history (QA still applies) |
 | Backfill | Default **latest 3**; UI offers 0/3/5/10/all; older episodes can be selected individually or in batches |
 | Retention | Per-podcast dropdown: 0/7/14/30/60/90/180/365 days or keep forever; **originals only** (clean files are never auto-deleted) |
 | Metadata | Preserve original title, description, link, comments, pubDate, episode/season, artwork; clean title gets ` (no ads)` |
@@ -111,7 +111,7 @@ its own copy.
   their expected relative `work/` paths. Scripts are invoked by absolute path.
 - To upgrade: replace the vendored scripts, keep the one documented local patch
   (`refine.sh` honors `WHISPER_LANG`), bump `VERSION`, and run one review
-  episode before trusting auto-publish. No other app module changes.
+  episode to verify the integration. No other app module changes.
 
 ---
 
@@ -193,17 +193,18 @@ is kept for RSS ordering and display.
 
 ### Auto-publish gate
 
-Auto-publish is off by default. When enabled for a podcast, an episode with cuts
-can skip review only if:
+Auto-publish is off by default. When enabled for a podcast, every episode is
+approved and queued for publishing without stopping in review:
 
-- the podcast already has at least 3 published episodes,
-- the review has no warnings,
-- confidence is at least 0.80,
-- and QA passes.
+- confidence, review warnings, LLM-only provenance, and published-episode
+  history are **not** gates;
+- cuts still go through the cutter and QA, so a broken output can still fail
+  and return to review;
+- a no-ad episode is published as-is, including when the LLM pass failed.
 
-A no-ad episode is approved and published as-is immediately, because there is
-nothing to cut or QA. The exception is a failed LLM pass: “no ads” is not
-trusted then, so the episode stays in review.
+This is deliberately availability-first: the goal is to keep the feed moving,
+then fix bad cuts after the fact. Leave auto-publish off when cut precision is
+more important than availability.
 
 Otherwise it stays in `awaiting_review`.
 
@@ -226,8 +227,8 @@ timestamps and never edits audio itself.
   show-stop regex, 25% removal cap, contiguous-range normalisation, overlap
   de-duplication.
 - Merge policy: union with regex/repeat cuts, with provenance in
-  `review_json`. LLM-only cuts are warned and blocked from auto-publish until
-  they have been reviewed and corroborated.
+  `review_json`. LLM-only cuts are warned; they are still published when
+  auto-publish is enabled, because availability is preferred over a stuck feed.
 - Failure policy: Ollama errors are logged; the job still reaches review with
   heuristic cuts. The LLM result is stored in `episodes.llm_json` for audit.
 - Sponsor memory / cross-episode repeats / few-shot feedback are still future
@@ -326,7 +327,7 @@ access and roughly 1 GB of free space.
 
 ## 11. Testing
 
-`tests/` (40 tests, no ffmpeg/whisper required):
+`tests/` (42 tests, no ffmpeg/whisper required):
 
 - slug/filename/duration/safe-join helpers
 - RSS/OPML parsing (including real-world fixture shape)
@@ -359,8 +360,9 @@ approve → cut → QA pass → publish → RSS item → Range 206.
 - **Podcast client acceptance**: subscribe in Downcast, refresh, stream, seek,
   background play, and check new-episode pickup.
 - **Ad policy**: defaults are conservative; per-show labels still need tuning.
-- **LLM calibration**: run on 10–20 labelled episodes before trusting LLM-only
-  cuts; cross-episode repeat detection and sponsor memory are not built yet.
+- **LLM calibration**: run on 10–20 labelled episodes to measure LLM-only cut
+  quality; auto-publish no longer waits for that calibration. Cross-episode
+  repeat detection and sponsor memory are not built yet.
 - **Non-MP3**: generic re-encode path is implemented but not exercised on a real
   m4a/aac feed yet.
 - **Notifications**: dashboard only.
@@ -380,4 +382,4 @@ approve → cut → QA pass → publish → RSS item → Range 206.
 2. Import the four Overcast feeds with backfill 3.
 3. Calibrate `labels_json` / `ad_lang` per show; process one episode each.
 4. Subscribe in Downcast, verify seek/stream/download.
-5. Tune confidence/auto-publish after a few approved episodes.
+5. Tune confidence thresholds and fix any published cuts after the fact.

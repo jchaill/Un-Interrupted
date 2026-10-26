@@ -107,8 +107,8 @@
     </label>
     <label class="field checkbox-field">
       <input type="checkbox" name="auto_publish" {{ 'checked' if podcast.auto_publish else '' }}>
-      <span>Auto-publish when calibration is confident</span>
-      <small>Requires at least 3 published episodes and no review warnings. Off by default.</small>
+      <span>Auto-publish every episode without review</span>
+      <small>Publishes detected cuts even when confidence is low or warnings are present, so problem episodes can be fixed later instead of waiting in review. Off by default.</small>
     </label>
     <div class="span-2 form-actions">
       <button class="btn primary" type="submit">Save settings</button>

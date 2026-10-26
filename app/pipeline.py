@@ -400,38 +400,30 @@ def _maybe_auto_publish(
 ) -> bool:
     if not podcast.get("auto_publish"):
         return False
-    if not cuts:
-        # Nothing to cut: publish the original bytes unchanged. Still refuse
-        # when the LLM pass failed, because then "no ads" is not trustworthy.
-        if (review.get("llm") or {}).get("error"):
-            _write_log(log, "Auto-publish skipped: no cuts, but LLM detection failed.")
-            return False
-        db.update_episode(
-            episode_id,
-            cuts_json="[]",
-            approved_cuts_json="[]",
-            status="approved",
-            error_message=None,
-        )
-        db.enqueue_job("cut", podcast_id=podcast["id"], episode_id=episode_id, priority=85)
-        _write_log(log, "Auto-publish approved a no-ad episode; original audio will be copied unchanged.")
-        return True
-    if review.get("warnings") or float(review.get("confidence") or 0) < 0.80:
-        return False
-    if review.get("llm_only"):
-        _write_log(log, "Auto-publish skipped: the cut list contains LLM-only ranges.")
-        return False
-    if db.published_count(podcast["id"]) < 3:
-        _write_log(log, "Auto-publish skipped: fewer than 3 published episodes.")
-        return False
+    # Auto-publish is deliberately availability-first: confidence, warnings,
+    # LLM-only ranges and episode history are not gates. The user can fix any
+    # bad cut later instead of leaving the episode stuck in review.
+    encoded = json.dumps(cuts, ensure_ascii=False) if cuts else "[]"
     db.update_episode(
         episode_id,
-        approved_cuts_json=json.dumps(cuts, ensure_ascii=False),
+        cuts_json=encoded,
+        approved_cuts_json=encoded,
         status="approved",
         error_message=None,
     )
     db.enqueue_job("cut", podcast_id=podcast["id"], episode_id=episode_id, priority=85)
-    _write_log(log, "Auto-publish approved this episode.")
+    if cuts:
+        _write_log(
+            log,
+            f"Auto-publish approved {len(cuts)} cut(s) regardless of confidence "
+            f"({float(review.get('confidence') or 0):.2f}) or warnings "
+            f"({len(review.get('warnings') or [])}).",
+        )
+    else:
+        _write_log(
+            log,
+            "Auto-publish approved a no-ad episode; original audio will be copied unchanged.",
+        )
     return True
 
 

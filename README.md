@@ -122,10 +122,12 @@ private feed updates; Downcast sees the clean episode
 - **No ads detected:** the review button becomes **Approve & publish as-is**.
   The original audio is copied unchanged into the clean feed; there is nothing
   to cut or QA.
-- **Auto-publish** is opt-in per podcast. With cuts, it only fires when the show
-  has at least 3 published episodes, the review has no warnings, confidence is
-  ≥ 0.80, and QA passes. A no-ad episode is auto-published as-is even before
-  that threshold, unless the LLM pass failed.
+- **Auto-publish** is opt-in per podcast. When enabled, every episode is
+  approved and queued for publishing without waiting in review — even when
+  confidence is low, review warnings are present, or the show has fewer than 3
+  published episodes. QA still runs on cuts. A no-ad episode is published as-is.
+  This is deliberately availability-first: a bad cut can be fixed later, while
+  a stuck episode blocks the feed.
 - **Skip** keeps the episode out of the clean feed (the original stays until
   retention deletes it).
 - **Re-detect** re-runs detection on the existing transcript (fast).
@@ -187,7 +189,8 @@ Defaults:
   transcript, overlapping the show re-entry regex, or removing more than 25% of
   the episode are rejected.
 - LLM proposals are merged with regex/repeat cuts. An **LLM-only** cut always
-  gets a review warning and cannot auto-publish.
+  gets a review warning; with auto-publish enabled it is still published, and
+  QA still runs.
 - If Ollama is unreachable, the job still finishes with the heuristic cuts and
   the review shows the LLM error.
 
