@@ -55,6 +55,35 @@
     if (qr && typeof qr.showModal !== "function") {
       qr.setAttribute("open", "");
     }
+
+    // Episode table: select-all + enable the batch action only when needed.
+    const batchForm = document.getElementById("batch-form");
+    if (batchForm) {
+      const boxes = Array.from(
+        document.querySelectorAll('input.episode-checkbox[form="batch-form"]')
+      );
+      const selectAll = document.getElementById("episode-select-all");
+      const button = document.getElementById("batch-process");
+      const count = document.getElementById("batch-count");
+      const update = () => {
+        const selected = boxes.filter((box) => box.checked).length;
+        if (button) button.disabled = selected === 0;
+        if (count) count.textContent = selected + " selected";
+        if (selectAll) {
+          selectAll.disabled = boxes.length === 0;
+          selectAll.checked = boxes.length > 0 && selected === boxes.length;
+          selectAll.indeterminate = selected > 0 && selected < boxes.length;
+        }
+      };
+      if (selectAll) {
+        selectAll.addEventListener("change", () => {
+          boxes.forEach((box) => { box.checked = selectAll.checked; });
+          update();
+        });
+      }
+      boxes.forEach((box) => box.addEventListener("change", update));
+      update();
+    }
   });
 
   // HTMX: keep scroll position for the queue partial refresh.

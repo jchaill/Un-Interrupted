@@ -44,7 +44,7 @@ The phone only talks to this Mac. Original feeds are never exposed.
 | Feed shape | One private feed per podcast; **no combined feed**; admin-only OPML export |
 | Review | Download → transcribe → detect → **AWAITING REVIEW**; publish only after approval by default |
 | Auto-publish | Opt-in per podcast, gated on history/confidence/warnings |
-| Backfill | Default **latest 3**; UI offers 0/3/5/10/all; older episodes can be flagged individually |
+| Backfill | Default **latest 3**; UI offers 0/3/5/10/all; older episodes can be selected individually or in batches |
 | Retention | Per-podcast dropdown: 0/7/14/30/60/90/180/365 days or keep forever; **originals only** (clean files are never auto-deleted) |
 | Metadata | Preserve original title, description, link, comments, pubDate, episode/season, artwork; clean title gets ` (no ads)` |
 | Artwork | Cached locally and served from the app |
@@ -244,7 +244,8 @@ timestamps and never edits audio itself.
 - **Podcast detail** — copy feed URL, QR code, per-show settings (title,
   description, author, language, category, labels JSON, show-stop, ad language,
   poll interval, retention, auto-process/auto-publish), library sizes, and a
-  filterable/paginated episode table with individual **Process** buttons.
+  filterable/paginated episode table with individual **Process** buttons and
+  checkbox multi-select for batch download/processing.
 - **Review** — original audio player, proposed clean preview, cut rows with
   transcript excerpts/warnings, editable start/end, approve/skip/re-detect/
   re-cut.
@@ -325,7 +326,7 @@ access and roughly 1 GB of free space.
 
 ## 11. Testing
 
-`tests/` (39 tests, no ffmpeg/whisper required):
+`tests/` (40 tests, no ffmpeg/whisper required):
 
 - slug/filename/duration/safe-join helpers
 - RSS/OPML parsing (including real-world fixture shape)

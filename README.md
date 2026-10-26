@@ -29,7 +29,7 @@ local Ollama model if that is not acceptable.
   auto-process, auto-publish.
 - **AI ad detection on every episode** through Ollama (local or cloud), so
   rotating or newly sold sponsor reads do not depend on a fixed regex list.
-- Browse older episodes and flag individual ones for processing.
+- Browse older episodes and batch-select them for download/processing.
 - Copy feed URL / QR code straight into Downcast or Apple Podcasts.
 
 ---
@@ -133,9 +133,11 @@ private feed updates; Downcast sees the clean episode
 
 ### Older episodes
 
-Open a podcast → **All episodes** → **Process** on any older episode. The app
-resumes from whatever stage is already on disk (download, transcribe, detect,
-cut, QA, publish).
+Open a podcast → **All episodes**. Tick the checkboxes for older episodes and
+click **Download and process selected**, or use **Process** on a single row. The
+app resumes each episode from whatever stage is already on disk (download,
+transcribe, detect, cut, QA, publish). The header checkbox selects every
+eligible episode on the current page.
 
 ---
 

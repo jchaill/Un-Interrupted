@@ -242,6 +242,64 @@ def test_approve_without_cuts_queues_original_as_clean(app_env):
     assert job["state"] == "queued"
 
 
+def test_batch_process_queues_selected_episodes(app_env):
+    podcast = db.create_podcast(
+        {
+            "title": "Batch Show",
+            "feed_url": "https://example.com/batch.xml",
+            "language": "en",
+            "feed_token": "batch-token",
+            "last_polled_at": db.now_iso(),
+        }
+    )
+    episodes = []
+    for index in range(3):
+        episode, _ = db.upsert_feed_episode(
+            podcast["id"],
+            {
+                "guid": f"batch-guid-{index}",
+                "title": f"Batch episode {index}",
+                "description": "Description",
+                "published_at": f"2026-10-2{index}T12:00:00+00:00",
+                "original_url": f"https://example.com/batch-{index}.mp3",
+                "enclosure_type": "audio/mpeg",
+                "duration": 30.0,
+                "item_json": {},
+            },
+        )
+        episodes.append(episode)
+    db.update_episode(episodes[2]["id"], status="published")
+
+    client = _client(app_env)
+    page = client.get(f"/podcasts/{podcast['slug']}")
+    assert page.status_code == 200
+    assert "Download &amp; process" in page.text
+    assert "Download &amp;amp; process" not in page.text
+    assert 'id="batch-form"' in page.text
+
+    response = client.post(
+        f"/podcasts/{podcast['slug']}/episodes/batch-process",
+        data={
+            "episode_ids": [
+                str(episodes[0]["id"]),
+                str(episodes[1]["id"]),
+                str(episodes[2]["id"]),
+            ],
+            "filter": "all",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "Queued+2+episode" in response.headers["location"]
+    for episode in episodes[:2]:
+        saved = db.get_episode(episode["id"])
+        assert saved["status"] == "queued"
+        job = db.latest_job_for_episode(episode["id"], "download")
+        assert job is not None
+        assert job["state"] == "queued"
+    assert db.get_episode(episodes[2]["id"])["status"] == "published"
+
+
 def test_media_range_and_token(app_env):
     cfg = config.load_config()
     podcast = db.create_podcast(

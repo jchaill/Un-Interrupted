@@ -315,7 +315,9 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 18px 0; }
 .table tbody tr:hover { background: color-mix(in srgb, var(--surface-2) 70%, transparent); }
 .table.compact th, .table.compact td { padding: 8px 12px; }
 .table .actions-col { text-align: right; width: 1%; white-space: nowrap; }
-.table .check-col { width: 34px; }
+.table .check-col { width: 34px; text-align: center; }
+.episode-checkbox { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+.batch-bar { display: flex; align-items: center; gap: 12px; margin: 0 0 10px; flex-wrap: wrap; }
 .empty-cell { text-align: center; color: var(--muted); padding: 28px !important; }
 .episodes-table td { vertical-align: middle; }
 .ep-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 580; }

@@ -623,6 +623,13 @@ def podcast_page(request: Request, slug: str):
         )
         episode["_latest_job"] = latest_jobs.get(int(episode["id"]))
         episode["_can_review"] = episode["status"] in {"awaiting_review", "qa_failed"} or bool(episode.get("review_json"))
+        episode["_batch_processable"] = (
+            episode["status"] in BATCH_PROCESSABLE
+            and not (
+                episode["_latest_job"]
+                and episode["_latest_job"]["state"] in {"queued", "running"}
+            )
+        )
 
     art_url = rss.artwork_url(_base_url(cfg), podcast)
     if not art_url:
@@ -718,6 +725,47 @@ def podcast_poll_now(request: Request, slug: str):
     return _redirect(f"/podcasts/{slug}", msg="Feed check queued.")
 
 
+@app.post("/podcasts/{slug}/episodes/batch-process")
+async def episodes_batch_process(request: Request, slug: str):
+    cfg, _session = security.require_admin(request)
+    podcast = _podcast_or_404(slug)
+    form = await request.form()
+    filter_name = str(form.get("filter") or "all")
+    if filter_name not in {"all", "selected", "review", "failed", "published"}:
+        filter_name = "all"
+    accepted = 0
+    skipped = 0
+    for raw in form.getlist("episode_ids"):
+        try:
+            episode_id = int(str(raw))
+        except (TypeError, ValueError):
+            skipped += 1
+            continue
+        try:
+            episode = _episode_for_podcast(podcast, episode_id)
+        except HTTPException:
+            skipped += 1
+            continue
+        latest = db.latest_job_for_episode(episode["id"])
+        if (
+            episode["status"] not in BATCH_PROCESSABLE
+            or (latest and latest["state"] in {"queued", "running"})
+        ):
+            skipped += 1
+            continue
+        _resume_episode(cfg, podcast, episode)
+        accepted += 1
+    if not accepted:
+        return _redirect(
+            f"/podcasts/{slug}?filter={filter_name}",
+            err="No selected episodes were eligible for processing.",
+        )
+    message = f"Queued {accepted} episode(s) for processing."
+    if skipped:
+        message += f" Skipped {skipped} ineligible episode(s)."
+    return _redirect(f"/podcasts/{slug}?filter={filter_name}", msg=message)
+
+
 @app.post("/podcasts/{slug}/episodes/{episode_id}/process")
 def episode_process(request: Request, slug: str, episode_id: int):
     cfg, _session = security.require_admin(request)
@@ -725,6 +773,9 @@ def episode_process(request: Request, slug: str, episode_id: int):
     episode = _episode_for_podcast(podcast, episode_id)
     next_stage = _resume_episode(cfg, podcast, episode)
     return _redirect(f"/podcasts/{slug}", msg=f"Queued {next_stage}.")
+
+
+BATCH_PROCESSABLE = {"discovered", "downloaded", "skipped", "failed"}
 
 
 def _resume_episode(cfg: dict[str, Any], podcast: dict[str, Any], episode: dict[str, Any]) -> str:

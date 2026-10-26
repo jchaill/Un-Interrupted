@@ -127,14 +127,27 @@
   </div>
 </div>
 
+<form id="batch-form" method="post" action="/podcasts/{{ podcast.slug }}/episodes/batch-process">
+  <input type="hidden" name="filter" value="{{ filter }}">
+</form>
+<div class="batch-bar">
+  <button class="btn primary small" type="submit" form="batch-form" id="batch-process" disabled data-confirm="Queue the selected episodes for download and processing?">Download and process selected</button>
+  <span class="muted small" id="batch-count">0 selected</span>
+</div>
+
 <div class="table-wrap card flush">
   <table class="table episodes-table">
     <thead>
-      <tr><th>Date</th><th>Episode</th><th>Duration</th><th>Status</th><th class="actions-col">Actions</th></tr>
+      <tr><th class="check-col"><input type="checkbox" id="episode-select-all" aria-label="Select all episodes that can be processed"></th><th>Date</th><th>Episode</th><th>Duration</th><th>Status</th><th class="actions-col">Actions</th></tr>
     </thead>
     <tbody>
     {% for ep in episodes %}
       <tr class="{{ 'review-row' if ep.status in ['awaiting_review','qa_failed'] else '' }}">
+        <td class="check-col">
+          {% if ep._batch_processable %}
+          <input type="checkbox" class="episode-checkbox" name="episode_ids" value="{{ ep.id }}" form="batch-form" aria-label="Select {{ ep.title }}">
+          {% endif %}
+        </td>
         <td class="nowrap muted">{{ ep.published_at | fmt_dt('%b %d, %Y') }}</td>
         <td>
           <div class="ep-title">
@@ -162,7 +175,7 @@
             <span class="muted small">in clean feed</span>
           {% elif ep.status in ['discovered','skipped','failed'] %}
             <form method="post" action="/podcasts/{{ podcast.slug }}/episodes/{{ ep.id }}/process" class="inline">
-              <button class="btn small {{ 'primary' if ep.status == 'discovered' else '' }}" type="submit">{{ 'Download &amp; process' if ep.status == 'discovered' else 'Reprocess' }}</button>
+              <button class="btn small {{ 'primary' if ep.status == 'discovered' else '' }}" type="submit">{{ 'Download & process' if ep.status == 'discovered' else 'Reprocess' }}</button>
             </form>
           {% else %}
             <span class="muted small">{{ ep.status | status_label }}</span>
@@ -170,7 +183,7 @@
         </td>
       </tr>
     {% else %}
-      <tr><td colspan="5" class="empty-cell">No episodes in this view.</td></tr>
+      <tr><td colspan="6" class="empty-cell">No episodes in this view.</td></tr>
     {% endfor %}
     </tbody>
   </table>
