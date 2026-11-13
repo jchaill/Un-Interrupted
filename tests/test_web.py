@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -78,6 +79,9 @@ def test_admin_pages_render(app_env, monkeypatch):
         response = client.get(path)
         assert response.status_code == 200, path
         assert "Un-Interupted" in response.text
+        # Assets are stamped so a deploy cannot serve a stale app.js/app.css.
+        assert "/static/app.js?v=" in response.text
+        assert "/static/app.css?v=" in response.text
 
 
 def test_podcast_and_review_pages_render(app_env):
@@ -162,6 +166,7 @@ def test_podcast_and_review_pages_render(app_env):
     assert "Cut ranges" in response.text
     assert "Acme" in response.text
     assert "LLM 91%" in response.text
+    assert "Retry from scratch" in response.text
     response = client.post(
         f"/podcasts/{podcast['slug']}/episodes/{episode['id']}/approve",
         data={"start": "3", "end": "9"},
@@ -453,3 +458,371 @@ def test_settings_llm_install_hints(app_env, monkeypatch):
     page = client.get("/settings")
     assert "Ollama is not installed" in page.text
     assert "brew install ollama" in page.text
+
+
+def _episode_with_artifacts(app_env, slug: str = "reprocess-show"):
+    cfg = config.load_config()
+    podcast = db.create_podcast(
+        {
+            "title": "Reprocess Show",
+            "feed_url": f"https://example.com/{slug}.xml",
+            "language": "fr",
+            "feed_token": f"{slug}-token",
+            "last_polled_at": db.now_iso(),
+        }
+    )
+    episode, _ = db.upsert_feed_episode(
+        podcast["id"],
+        {
+            "guid": f"{slug}-guid",
+            "title": "Les grosses têtes",
+            "description": "Description",
+            "published_at": "2026-11-01T12:00:00+00:00",
+            "original_url": f"https://example.com/{slug}.mp3",
+            "enclosure_type": "audio/mpeg",
+            "duration": 120.0,
+            "item_json": {},
+        },
+    )
+    dirs = config.ensure_episode_dirs(cfg, podcast["slug"])
+    original = dirs["originals"] / "episode.mp3"
+    original.write_bytes(b"ID3" + b"a" * 2000)
+    transcript = dirs["work"] / f"tr_ep{episode['id']}.json"
+    transcript.write_text('{"transcription": []}', encoding="utf-8")
+    cuts = dirs["work"] / f"cuts_ep{episode['id']}.json"
+    cuts.write_text("[]", encoding="utf-8")
+    clean = dirs["episodes"] / "2026-11-01 - les grosses tetes - deadbeef (no ads).mp3"
+    clean.write_bytes(b"ID3" + b"b" * 2000)
+    pre = dirs["work"] / f"pre_ep{episode['id']}.wav"
+    pre.write_bytes(b"RIFF" + b"c" * 500)
+    index = dirs["work"] / "index.json"
+    index.write_text(
+        json.dumps(
+            {
+                f"ep{episode['id']}": {"mp3": "episode.mp3", "duration": 120.0},
+                "ep999999": {"mp3": "other.mp3", "duration": 60.0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    db.update_episode(
+        episode["id"],
+        status="failed",
+        selected=1,
+        original_path=config.rel_to_storage(cfg, original),
+        clean_filename=clean.name,
+        cuts_json="[]",
+        approved_cuts_json="[]",
+        review_json="{}",
+        error_message="machine rebooted during processing",
+        duration_original=120.0,
+    )
+    return podcast, db.get_episode(episode["id"]), dirs, original, transcript, cuts, clean, pre, index
+
+
+def test_batch_reprocess_restarts_from_a_fresh_download(app_env):
+    (
+        podcast,
+        episode,
+        _dirs,
+        original,
+        transcript,
+        cuts,
+        clean,
+        pre,
+        index,
+    ) = _episode_with_artifacts(app_env)
+    client = _client(app_env)
+
+    page = client.get(f"/podcasts/{podcast['slug']}?filter=failed")
+    assert page.status_code == 200
+    assert 'id="batch-reprocess"' in page.text
+    assert 'id="batch-delete"' in page.text
+    assert 'data-processable="1"' in page.text
+
+    response = client.post(
+        f"/podcasts/{podcast['slug']}/episodes/batch-reprocess",
+        data={"episode_ids": [str(episode["id"])], "filter": "failed"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "full+reprocess" in response.headers["location"]
+
+    saved = db.get_episode(episode["id"])
+    assert saved["status"] == "queued"
+    assert saved["error_message"] is None
+    assert saved["original_path"] is None
+    assert saved["clean_filename"] is None
+    assert saved["cuts_json"] is None
+    assert saved["approved_cuts_json"] is None
+    assert saved["review_json"] is None
+    assert saved["selected"] == 1
+
+    for path in (original, transcript, cuts, clean, pre):
+        assert not path.exists(), path
+    # transcribe.sh bookkeeping is pruned too, other tags are kept.
+    assert f"ep{episode['id']}" not in json.loads(index.read_text())
+    assert "ep999999" in json.loads(index.read_text())
+
+    job = db.latest_job_for_episode(episode["id"], "download")
+    assert job is not None and job["state"] == "queued"
+
+
+def test_batch_reprocess_skips_the_running_episode(app_env):
+    podcast, episode, _dirs, original, _t, _c, _cl, _pre, _idx = _episode_with_artifacts(
+        app_env, slug="busy-show"
+    )
+    job_id = db.enqueue_job("cut", podcast_id=podcast["id"], episode_id=episode["id"])
+    db.update_job(job_id, state="running", started_at=db.now_iso())
+    client = _client(app_env)
+    response = client.post(
+        f"/podcasts/{podcast['slug']}/episodes/batch-reprocess",
+        data={"episode_ids": [str(episode["id"])], "filter": "all"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "err=" in response.headers["location"]
+    assert db.get_episode(episode["id"])["status"] == "failed"
+    assert original.exists()
+
+
+def test_batch_delete_removes_episode_files_and_jobs(app_env):
+    (
+        podcast,
+        episode,
+        _dirs,
+        original,
+        transcript,
+        cuts,
+        clean,
+        pre,
+        index,
+    ) = _episode_with_artifacts(app_env, slug="delete-show")
+    job_id = db.enqueue_job("cut", podcast_id=podcast["id"], episode_id=episode["id"])
+    client = _client(app_env)
+
+    response = client.post(
+        f"/podcasts/{podcast['slug']}/episodes/batch-delete",
+        data={"episode_ids": [str(episode["id"])], "filter": "all"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "Deleted+1+episode" in response.headers["location"]
+
+    # The row is kept as a tombstone so polling cannot resurrect the episode.
+    assert db.get_episode(episode["id"])["status"] == "deleted"
+    assert db.list_episodes(podcast["id"]) == []
+    assert db.count_episodes(podcast["id"]) == 0
+    assert "deleted" not in db.episode_status_counts(podcast["id"])
+    assert db.get_job(job_id) is None
+    for path in (original, transcript, cuts, clean, pre):
+        assert not path.exists(), path
+    assert f"ep{episode['id']}" not in json.loads(index.read_text())
+    assert "ep999999" in json.loads(index.read_text())
+
+    feed = client.get(f"/feed/{podcast['slug']}/delete-show-token.xml")
+    assert feed.status_code == 200
+    assert "Les grosses" not in feed.text
+
+    # A later poll sees the same guid: no new row, no re-download.
+    again, created = db.upsert_feed_episode(
+        podcast["id"],
+        {
+            "guid": "delete-show-guid",
+            "title": "Les grosses têtes",
+            "original_url": "https://example.com/delete-show.mp3",
+            "published_at": "2026-11-01T12:00:00+00:00",
+            "item_json": {},
+        },
+    )
+    assert created is False
+    assert again["status"] == "deleted"
+    assert db.count_episodes(podcast["id"]) == 0
+
+    # Hidden from "All", but reachable from the Deleted tab and restorable.
+    assert "Les grosses" not in client.get(f"/podcasts/{podcast['slug']}").text
+    deleted_page = client.get(f"/podcasts/{podcast['slug']}?filter=deleted")
+    assert "Les grosses" in deleted_page.text
+    assert "Restore" in deleted_page.text
+    response = client.post(
+        f"/podcasts/{podcast['slug']}/episodes/{episode['id']}/restore",
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert db.get_episode(episode["id"])["status"] == "discovered"
+    assert db.count_episodes(podcast["id"]) == 1
+
+
+def test_delete_selected_with_nothing_checked_reports_an_error(app_env):
+    podcast = db.create_podcast(
+        {
+            "title": "Empty Delete Show",
+            "feed_url": "https://example.com/empty-delete.xml",
+            "language": "en",
+            "feed_token": "empty-delete-token",
+            "last_polled_at": db.now_iso(),
+        }
+    )
+    client = _client(app_env)
+    response = client.post(
+        f"/podcasts/{podcast['slug']}/episodes/batch-delete",
+        data={"filter": "all"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "err=" in response.headers["location"]
+
+
+def test_add_folder_podcast_preview_create_and_page(app_env, tmp_path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "2026-11-01 - one.mp3").write_bytes(b"ID3" + b"a" * 200)
+    (inbox / "2026-11-02 - two.mp3").write_bytes(b"ID3" + b"b" * 200)
+    (inbox / "notes.txt").write_text("ignore me")
+    client = _client(app_env)
+
+    page = client.get("/podcasts/add?tab=folder")
+    assert page.status_code == 200
+    assert "From a folder" in page.text
+    assert 'name="folder_path"' in page.text
+
+    preview = client.post(
+        "/podcasts/add-folder",
+        data={"action": "preview", "folder_path": str(inbox), "title": "Archive", "language": "fr"},
+    )
+    assert preview.status_code == 200
+    assert "2 audio file(s)" in preview.text
+    assert "one.mp3" in preview.text
+    assert "notes.txt" not in preview.text
+
+    created = client.post(
+        "/podcasts/add-folder",
+        data={
+            "action": "add",
+            "folder_path": str(inbox),
+            "title": "Archive",
+            "language": "fr",
+            "scan_interval": "15",
+        },
+        follow_redirects=False,
+    )
+    assert created.status_code == 303
+    slug = created.headers["location"].split("?")[0].rstrip("/").rsplit("/", 1)[-1]
+
+    podcast = db.get_podcast_by_slug(slug)
+    assert podcast["source_kind"] == "folder"
+    assert podcast["source_path"] == str(inbox)
+    assert podcast["feed_url"] == f"folder://{inbox}"
+    assert podcast["poll_interval_minutes"] == 15
+    assert db.count_episodes(podcast["id"]) == 2
+    for episode in db.list_episodes(podcast["id"]):
+        assert episode["original_path"] is None
+        assert episode["source_path"]
+        assert Path(episode["source_path"]).is_file()
+
+    detail = client.get(f"/podcasts/{slug}")
+    assert "Scan folder now" in detail.text
+    assert "Check feed now" not in detail.text
+    assert "Scan interval (minutes)" in detail.text
+    assert str(inbox) in detail.text
+
+    # Duplicate folder is rejected.
+    duplicate = client.post(
+        "/podcasts/add-folder",
+        data={"action": "preview", "folder_path": str(inbox), "title": "Again"},
+    )
+    assert duplicate.status_code == 200
+    assert "already added" in duplicate.text
+
+
+def test_folder_podcast_scan_route_and_settings(app_env, tmp_path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "2026-11-01 - one.mp3").write_bytes(b"ID3" + b"a" * 200)
+    client = _client(app_env)
+    response = client.post(
+        "/podcasts/add-folder",
+        data={"action": "add", "folder_path": str(inbox), "title": "Archive", "scan_interval": "10"},
+        follow_redirects=False,
+    )
+    slug = response.headers["location"].split("?")[0].rstrip("/").rsplit("/", 1)[-1]
+    podcast = db.get_podcast_by_slug(slug)
+
+    scan = client.post(f"/podcasts/{slug}/scan", follow_redirects=False)
+    assert scan.status_code == 303
+    job = db.list_jobs(limit=5)[0]
+    assert job["type"] == "scan" and job["state"] == "queued"
+
+    moved = tmp_path / "moved"
+    moved.mkdir()
+    (moved / "2026-11-01 - one.mp3").write_bytes(b"ID3" + b"a" * 200)
+    saved = client.post(
+        f"/podcasts/{slug}/settings",
+        data={
+            "title": podcast["title"],
+            "language": "fr",
+            "poll_interval_minutes": "45",
+            "source_path": str(moved),
+            "labels_json": "[]",
+        },
+        follow_redirects=False,
+    )
+    assert saved.status_code == 303
+    updated = db.get_podcast(podcast["id"])
+    assert updated["source_path"] == str(moved)
+    assert updated["poll_interval_minutes"] == 45
+    episode = db.list_episodes(podcast["id"])[0]
+    assert Path(episode["source_path"]).parent == moved
+
+
+def test_folder_picker_api_lists_directories(app_env, tmp_path):
+    root = tmp_path / "media"
+    (root / "Show A").mkdir(parents=True)
+    (root / "Show A" / "one.mp3").write_bytes(b"x")
+    (root / ".hidden").mkdir()
+    client = _client(app_env)
+
+    roots = client.get("/api/fs/roots")
+    assert roots.status_code == 200
+    assert roots.json()["roots"][0]["name"] == "Home"
+
+    listing = client.get("/api/fs/list", params={"path": str(root)})
+    assert listing.status_code == 200
+    payload = listing.json()
+    assert payload["path"] == str(root.resolve())
+    assert [row["name"] for row in payload["dirs"]] == ["Show A"]
+    assert payload["dirs"][0]["audio"] == 1
+
+    hidden = client.get("/api/fs/list", params={"path": str(root), "hidden": 1}).json()
+    assert [row["name"] for row in hidden["dirs"]] == [".hidden", "Show A"]
+
+    bad = client.get("/api/fs/list", params={"path": str(tmp_path / "nope")})
+    assert bad.status_code == 400
+    assert "not found" in bad.json()["detail"].lower()
+
+
+def test_folder_picker_api_requires_admin(app_env):
+    client = TestClient(web.app)  # no login
+    for url in ("/api/fs/roots", "/api/fs/list?path=/"):
+        response = client.get(url, follow_redirects=False)
+        assert response.status_code == 401
+
+
+def test_folder_forms_expose_the_browse_button(app_env):
+    client = _client(app_env)
+    page = client.get("/podcasts/add?tab=folder")
+    assert 'data-path-picker="#folder-path"' in page.text
+    assert 'id="folder-picker"' in page.text
+
+    podcast = db.create_podcast(
+        {
+            "title": "Archive",
+            "feed_url": "folder:///tmp/nowhere",
+            "labels_json": "[]",
+            "feed_token": "tok",
+            "source_kind": "folder",
+            "source_path": "/tmp/nowhere",
+        }
+    )
+    detail = client.get(f"/podcasts/{podcast['slug']}")
+    assert 'data-path-picker="#source-path"' in detail.text

@@ -56,33 +56,56 @@
       qr.setAttribute("open", "");
     }
 
-    // Episode table: select-all + enable the batch action only when needed.
+    // Episode table: select-all + enable the batch actions only when needed.
     const batchForm = document.getElementById("batch-form");
     if (batchForm) {
-      const boxes = Array.from(
-        document.querySelectorAll('input.episode-checkbox[form="batch-form"]')
-      );
       const selectAll = document.getElementById("episode-select-all");
-      const button = document.getElementById("batch-process");
+      const processBtn = document.getElementById("batch-process");
+      const reprocessBtn = document.getElementById("batch-reprocess");
+      const deleteBtn = document.getElementById("batch-delete");
       const count = document.getElementById("batch-count");
+      const boxes = () =>
+        Array.from(
+          document.querySelectorAll('input.episode-checkbox[form="batch-form"]')
+        );
       const update = () => {
-        const selected = boxes.filter((box) => box.checked).length;
-        if (button) button.disabled = selected === 0;
-        if (count) count.textContent = selected + " selected";
+        const all = boxes();
+        const selected = all.filter((box) => box.checked);
+        const processable = selected.filter(
+          (box) => box.dataset.processable === "1"
+        ).length;
+        if (processBtn) processBtn.disabled = processable === 0;
+        if (reprocessBtn) reprocessBtn.disabled = selected.length === 0;
+        if (deleteBtn) deleteBtn.disabled = selected.length === 0;
+        if (count) {
+          count.textContent = selected.length + " selected";
+          if (selected.length && processable < selected.length) {
+            count.textContent += " · " + processable + " ready to process";
+          }
+        }
         if (selectAll) {
-          selectAll.disabled = boxes.length === 0;
-          selectAll.checked = boxes.length > 0 && selected === boxes.length;
-          selectAll.indeterminate = selected > 0 && selected < boxes.length;
+          selectAll.disabled = all.length === 0;
+          selectAll.checked = all.length > 0 && selected.length === all.length;
+          selectAll.indeterminate =
+            selected.length > 0 && selected.length < all.length;
         }
       };
-      if (selectAll) {
-        selectAll.addEventListener("change", () => {
-          boxes.forEach((box) => { box.checked = selectAll.checked; });
+      // Delegated: also covers rows re-rendered after a swap.
+      document.addEventListener("change", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLInputElement)) return;
+        if (target === selectAll) {
+          boxes().forEach((box) => {
+            box.checked = selectAll.checked;
+          });
           update();
-        });
-      }
-      boxes.forEach((box) => box.addEventListener("change", update));
+        } else if (target.classList.contains("episode-checkbox")) {
+          update();
+        }
+      });
       update();
+      // Browsers may restore checkbox state after DOMContentLoaded.
+      window.addEventListener("load", update);
     }
   });
 

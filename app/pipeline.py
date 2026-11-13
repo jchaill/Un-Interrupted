@@ -55,6 +55,18 @@ def original_extension(episode: dict[str, Any]) -> str:
 
 
 def original_path(cfg: dict[str, Any], episode: dict[str, Any]) -> Path | None:
+    """The audio to transcribe: the user's file for folder podcasts, our copy otherwise."""
+    source = episode.get("source_path")
+    if source:
+        return Path(source)
+    rel = episode.get("original_path")
+    if rel:
+        return config.abs_from_storage(cfg, rel)
+    return None
+
+
+def owned_original(cfg: dict[str, Any], episode: dict[str, Any]) -> Path | None:
+    """Only the copy this app downloaded: never a folder-podcast source file."""
     rel = episode.get("original_path")
     if rel:
         return config.abs_from_storage(cfg, rel)
@@ -151,6 +163,9 @@ def _set_status(episode_id: int, status: str, error: str | None = None) -> None:
 
 def handle_poll(job: dict[str, Any], log: Path) -> None:
     podcast = _require_podcast(job.get("podcast_id"))
+    if (podcast.get("source_kind") or "rss") == "folder":
+        _write_log(log, "Folder podcast: nothing to poll, use the scan job.")
+        return
     _write_log(log, f"Polling {podcast['title']} <{podcast['feed_url']}>")
     try:
         result = feeds.poll_podcast(podcast["id"])
@@ -164,13 +179,48 @@ def handle_poll(job: dict[str, Any], log: Path) -> None:
     )
 
 
+def handle_scan(job: dict[str, Any], log: Path) -> None:
+    from . import folders
+
+    podcast = _require_podcast(job.get("podcast_id"))
+    if (podcast.get("source_kind") or "rss") != "folder":
+        _write_log(log, "Not a folder podcast; nothing to scan.")
+        return
+    _write_log(log, f"Scanning {podcast.get('source_path')} for new audio files")
+    try:
+        result = folders.scan(podcast)
+    except folders.FolderError as exc:
+        db.update_podcast(podcast["id"], last_error=str(exc)[:1000], last_polled_at=db.now_iso())
+        raise JobRetry(str(exc)) from exc
+    _write_log(
+        log,
+        f"Scan result: {result['files']} audio file(s), {result['new']} new, "
+        f"{result['known']} known, {result['queued']} queued, {result['skipped']} skipped",
+    )
+    for line in result.get("errors") or []:
+        _write_log(log, f"  skipped: {line}")
+
+
 def handle_download(job: dict[str, Any], log: Path) -> None:
     episode = _require_episode(job.get("episode_id"))
     podcast = _require_podcast(episode["podcast_id"])
     cfg = config.load_config()
     dirs = _dirs(cfg, podcast)
 
-    existing = original_path(cfg, episode)
+    source = episode.get("source_path")
+    if source:
+        # Folder podcast: the audio stays where the user keeps it.
+        path = Path(source)
+        if not path.is_file():
+            raise JobFatal(
+                f"Source file is missing: {path}",
+                episode_status="failed",
+            )
+        _write_log(log, f"Using source file in place: {path}")
+        _after_download(cfg, podcast, episode, path, log, persist_path=False)
+        return
+
+    existing = owned_original(cfg, episode)
     if existing and existing.is_file() and existing.stat().st_size > 0:
         _write_log(log, f"Original already present: {existing}")
         _after_download(cfg, podcast, episode, existing, log)
@@ -211,11 +261,13 @@ def _after_download(
     episode: dict[str, Any],
     path: Path,
     log: Path,
+    *,
+    persist_path: bool = True,
 ) -> None:
     duration = probe_duration(path)
     db.update_episode(
         episode["id"],
-        original_path=config.rel_to_storage(cfg, path),
+        original_path=config.rel_to_storage(cfg, path) if persist_path else None,
         enclosure_type=episode.get("enclosure_type") or "audio/mpeg",
         duration_original=duration or episode.get("duration_original"),
         downloaded_at=db.now_iso(),
@@ -450,6 +502,146 @@ def _copy_as_clean(source: Path, clean: Path, log: Path) -> None:
     clean.unlink(missing_ok=True)
     shutil.copy2(source, clean)
     _write_log(log, f"No ad cuts; copied original to {clean.name} unchanged.")
+
+
+def episode_artifacts(
+    cfg: dict[str, Any], podcast: dict[str, Any], episode: dict[str, Any]
+) -> list[Path]:
+    """Every file on disk that belongs to one episode."""
+    dirs = config.episode_dirs(cfg, podcast["slug"])
+    tag = episode_tag(episode)
+    paths: list[Path] = []
+    for pattern in (
+        f"tr_{tag}.*",
+        f"cuts_{tag}.*",
+        f"clean_{tag}.*",
+        f"review_{tag}.*",
+        f"pre_{tag}.*",
+    ):
+        paths.extend(sorted(dirs["work"].glob(pattern)))
+    original = owned_original(cfg, episode)
+    if original:
+        paths.append(original)
+        paths.append(original.with_name(original.name + ".part"))
+    if episode.get("clean_filename"):
+        paths.append(dirs["episodes"] / episode["clean_filename"])
+    return paths
+
+
+def _drop_index_entry(index_path: Path, tag: str) -> None:
+    """Drop the tag from transcribe.sh's work/index.json bookkeeping map."""
+    try:
+        data = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(data, dict) or tag not in data:
+        return
+    data.pop(tag, None)
+    try:
+        index_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
+def purge_episode_files(
+    cfg: dict[str, Any], podcast: dict[str, Any], episode: dict[str, Any]
+) -> list[str]:
+    """Remove every artifact of an episode (keeps the DB row).
+
+    Also drops the episode from transcribe.sh's work/index.json so no stale
+    tag -> source references are left behind after a delete or a full retry.
+    """
+    removed: list[str] = []
+    for path in episode_artifacts(cfg, podcast, episode):
+        try:
+            if path.is_file():
+                path.unlink()
+                removed.append(str(path))
+        except OSError:
+            pass
+    _drop_index_entry(
+        config.episode_dirs(cfg, podcast["slug"])["work"] / "index.json",
+        episode_tag(episode),
+    )
+    return removed
+
+
+def reset_episode_for_reprocess(
+    cfg: dict[str, Any], podcast: dict[str, Any], episode: dict[str, Any]
+) -> list[str]:
+    """Drop every derived artifact and restart the episode from a fresh download.
+
+    The original download is removed too, so a partial or corrupt file left by a
+    crash cannot poison the retry.
+    """
+    removed = purge_episode_files(cfg, podcast, episode)
+    db.cancel_queued_jobs(episode["id"])
+    db.update_episode(
+        episode["id"],
+        status="queued",
+        selected=1,
+        original_path=None,
+        clean_filename=None,
+        clean_duration=None,
+        clean_size=None,
+        clean_guid=None,
+        clean_published_at=None,
+        confidence=None,
+        cuts_json=None,
+        approved_cuts_json=None,
+        review_json=None,
+        llm_json=None,
+        engine_version=None,
+        error_message=None,
+        downloaded_at=None,
+    )
+    db.enqueue_job(
+        "download", podcast_id=podcast["id"], episode_id=episode["id"], priority=100
+    )
+    return removed
+
+
+def delete_episode(
+    cfg: dict[str, Any], podcast: dict[str, Any], episode: dict[str, Any]
+) -> list[str]:
+    """Delete an episode's files and hide it behind a tombstone row.
+
+    The row is kept (status ``deleted``) so the next feed poll updates it in
+    place instead of re-creating and re-downloading the episode.
+    """
+    removed = purge_episode_files(cfg, podcast, episode)
+    db.cancel_queued_jobs(episode["id"])
+    for job in db.list_jobs_for_episode(episode["id"]):
+        log_path = job.get("log_path")
+        if not log_path:
+            continue
+        try:
+            Path(log_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+    db.delete_jobs_for_episode(episode["id"])
+    db.update_episode(
+        episode["id"],
+        status="deleted",
+        selected=0,
+        original_path=None,
+        clean_filename=None,
+        clean_duration=None,
+        clean_size=None,
+        clean_guid=None,
+        clean_published_at=None,
+        confidence=None,
+        cuts_json=None,
+        approved_cuts_json=None,
+        review_json=None,
+        llm_json=None,
+        engine_version=None,
+        error_message=None,
+        downloaded_at=None,
+    )
+    return removed
 
 
 def handle_cut(job: dict[str, Any], log: Path) -> None:
@@ -739,6 +931,7 @@ def handle_relocate(job: dict[str, Any], log: Path) -> None:
 
 HANDLERS = {
     "poll": handle_poll,
+    "scan": handle_scan,
     "download": handle_download,
     "transcribe": handle_transcribe,
     "detect": handle_detect,

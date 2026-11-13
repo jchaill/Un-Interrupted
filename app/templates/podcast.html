@@ -7,6 +7,9 @@
     <div class="eyebrow">Podcast</div>
     <h1>{{ podcast.title }}</h1>
     <p class="muted">{{ podcast.author or 'Unknown author' }} · {{ podcast.language or 'auto' }} · {{ podcast.category or 'Uncategorised' }}</p>
+    {% if is_folder %}
+    <p class="muted small-break">Folder podcast · <code>{{ source_path }}</code> · scanned every {{ podcast.poll_interval_minutes or 30 }} min</p>
+    {% endif %}
     <div class="feed-line">
       <code id="feed-url">{{ feed_url }}</code>
       <button class="btn ghost small copy-btn" type="button" data-copy="{{ feed_url }}">Copy</button>
@@ -14,9 +17,15 @@
     </div>
   </div>
   <div class="head-actions">
+    {% if is_folder %}
+    <form method="post" action="/podcasts/{{ podcast.slug }}/scan" class="inline">
+      <button class="btn ghost" type="submit">Scan folder now</button>
+    </form>
+    {% else %}
     <form method="post" action="/podcasts/{{ podcast.slug }}/poll" class="inline">
       <button class="btn ghost" type="submit">Check feed now</button>
     </form>
+    {% endif %}
     <button class="btn ghost" type="button" onclick="document.getElementById('qr-panel').showModal()">QR code</button>
   </div>
 </div>
@@ -69,6 +78,21 @@
       <span>Category</span>
       <input type="text" name="category" value="{{ podcast.category or '' }}" placeholder="Society &amp; Culture">
     </label>
+    {% if is_folder %}
+    <label class="field span-2">
+      <span>Source folder</span>
+      <div class="input-row">
+        <input type="text" id="source-path" name="source_path" value="{{ source_path }}" spellcheck="false">
+        <button class="btn ghost" type="button" data-path-picker="#source-path">Browse…</button>
+      </div>
+      <small>Files are read in place and never copied, moved or deleted. Changing the path re-points existing episodes that still exist under the new folder.</small>
+    </label>
+    <label class="field">
+      <span>Scan interval (minutes)</span>
+      <input type="number" name="poll_interval_minutes" min="5" value="{{ podcast.poll_interval_minutes or 30 }}">
+      <small>How often the folder is checked for new audio files.</small>
+    </label>
+    {% else %}
     <label class="field">
       <span>Poll interval (minutes)</span>
       <input type="number" name="poll_interval_minutes" min="5" value="{{ podcast.poll_interval_minutes or 30 }}">
@@ -82,6 +106,7 @@
       </select>
       <small>Clean episodes are never deleted automatically.</small>
     </label>
+    {% endif %}
     <label class="field">
       <span>Detected-ad language</span>
       <select name="ad_lang">
@@ -124,6 +149,9 @@
     <a href="/podcasts/{{ podcast.slug }}?filter=review" class="{{ 'active' if filter == 'review' else '' }}">Review <span>{{ counts.get('awaiting_review', 0) + counts.get('qa_failed', 0) }}</span></a>
     <a href="/podcasts/{{ podcast.slug }}?filter=failed" class="{{ 'active' if filter == 'failed' else '' }}">Failed <span>{{ counts.get('failed', 0) }}</span></a>
     <a href="/podcasts/{{ podcast.slug }}?filter=published" class="{{ 'active' if filter == 'published' else '' }}">Published <span>{{ counts.get('published', 0) }}</span></a>
+    {% if deleted_count %}
+    <a href="/podcasts/{{ podcast.slug }}?filter=deleted" class="{{ 'active' if filter == 'deleted' else '' }}">Deleted <span>{{ deleted_count }}</span></a>
+    {% endif %}
   </div>
 </div>
 
@@ -132,20 +160,22 @@
 </form>
 <div class="batch-bar">
   <button class="btn primary small" type="submit" form="batch-form" id="batch-process" disabled data-confirm="Queue the selected episodes for download and processing?">Download and process selected</button>
+  <button class="btn ghost small" type="submit" form="batch-form" id="batch-reprocess" formaction="/podcasts/{{ podcast.slug }}/episodes/batch-reprocess" disabled data-confirm="Restart the selected episodes from scratch? Their original download, transcript, cuts and any published clean audio are deleted, then download → process → publish runs again.">Full retry (download → process → publish)</button>
+  <button class="btn danger small" type="submit" form="batch-form" id="batch-delete" formaction="/podcasts/{{ podcast.slug }}/episodes/batch-delete" disabled data-confirm="Delete the selected episodes? Their originals, work files and any published clean audio are removed from disk and from the clean feed. They stay restorable from the Deleted tab.">Delete selected</button>
   <span class="muted small" id="batch-count">0 selected</span>
 </div>
 
 <div class="table-wrap card flush">
   <table class="table episodes-table">
     <thead>
-      <tr><th class="check-col"><input type="checkbox" id="episode-select-all" aria-label="Select all episodes that can be processed"></th><th>Date</th><th>Episode</th><th>Duration</th><th>Status</th><th class="actions-col">Actions</th></tr>
+      <tr><th class="check-col"><input type="checkbox" id="episode-select-all" aria-label="Select all episodes"></th><th>Date</th><th>Episode</th><th>Duration</th><th>Status</th><th class="actions-col">Actions</th></tr>
     </thead>
     <tbody>
     {% for ep in episodes %}
       <tr class="{{ 'review-row' if ep.status in ['awaiting_review','qa_failed'] else '' }}">
         <td class="check-col">
-          {% if ep._batch_processable %}
-          <input type="checkbox" class="episode-checkbox" name="episode_ids" value="{{ ep.id }}" form="batch-form" aria-label="Select {{ ep.title }}">
+          {% if not ep._busy and ep.status != 'deleted' %}
+          <input type="checkbox" class="episode-checkbox" name="episode_ids" value="{{ ep.id }}" form="batch-form" data-processable="{{ '1' if ep._batch_processable else '0' }}" aria-label="Select {{ ep.title }}">
           {% endif %}
         </td>
         <td class="nowrap muted">{{ ep.published_at | fmt_dt('%b %d, %Y') }}</td>
@@ -171,8 +201,14 @@
         <td class="actions-col">
           {% if ep.status in ['awaiting_review', 'qa_failed'] or (ep.status == 'failed' and ep._can_review) %}
             <a class="btn small primary" href="/podcasts/{{ podcast.slug }}/episodes/{{ ep.id }}/review">Review</a>
+          {% elif ep.status == 'deleted' %}
+            <form method="post" action="/podcasts/{{ podcast.slug }}/episodes/{{ ep.id }}/restore" class="inline">
+              <button class="btn ghost small" type="submit">Restore</button>
+            </form>
           {% elif ep.status == 'published' %}
-            <span class="muted small">in clean feed</span>
+            <form method="post" action="/podcasts/{{ podcast.slug }}/episodes/{{ ep.id }}/reprocess" class="inline">
+              <button class="btn ghost small" type="submit" data-confirm="Re-download and re-process this episode from scratch? Its clean audio is removed from the feed until the new version is published.">Reprocess</button>
+            </form>
           {% elif ep.status in ['discovered','skipped','failed'] %}
             <form method="post" action="/podcasts/{{ podcast.slug }}/episodes/{{ ep.id }}/process" class="inline">
               <button class="btn small {{ 'primary' if ep.status == 'discovered' else '' }}" type="submit">{{ 'Download & process' if ep.status == 'discovered' else 'Reprocess' }}</button>
@@ -208,4 +244,6 @@
     </div>
   </div>
 </dialog>
+
+{% include "_folder_picker.html" %}
 {% endblock %}

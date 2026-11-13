@@ -97,8 +97,9 @@ class Worker:
             interval = int(podcast.get("poll_interval_minutes") or 30)
             if not _due(podcast.get("last_polled_at"), interval):
                 continue
+            job_type = "scan" if (podcast.get("source_kind") or "rss") == "folder" else "poll"
             db.enqueue_job(
-                "poll",
+                job_type,
                 podcast_id=podcast["id"],
                 priority=10,
                 max_attempts=2,

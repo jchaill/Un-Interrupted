@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 import json
 import os
 import re
+import secrets
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,7 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import __version__, artwork, config, db, feeds, pipeline, rss, security, toolchain
+from . import __version__, artwork, config, db, feeds, folders, pipeline, rss, security, toolchain
 from .engine import adapter, llm
 from .media import serve_audio, serve_file
 from .paths import (
@@ -117,6 +118,18 @@ templates.env.filters["strip_html"] = _strip_html
 templates.env.filters["status_class"] = _status_class
 templates.env.filters["status_label"] = _status_label
 templates.env.globals["app_version"] = __version__
+
+
+def _static_url(name: str) -> str:
+    """Static asset URL with an mtime stamp so a deploy never serves stale JS/CSS."""
+    try:
+        stamp = int((BASE_DIR / "static" / name).stat().st_mtime)
+    except OSError:
+        stamp = 0
+    return f"/static/{name}?v={stamp}"
+
+
+templates.env.globals["static_url"] = _static_url
 
 
 def _base_url(cfg: dict[str, Any]) -> str:
@@ -427,13 +440,34 @@ def dashboard(request: Request):
 @app.get("/podcasts/add", response_class=HTMLResponse)
 def add_podcast_page(request: Request):
     cfg, _session = security.require_admin(request)
+    tab = "folder" if request.query_params.get("tab") == "folder" else "rss"
     return _render(
         request,
         "add_podcast.html",
+        tab=tab,
         feed_url=request.query_params.get("url", ""),
         preview=None,
         backfill="3",
+        folder_path=request.query_params.get("path", ""),
+        folder_title="",
+        folder_language="auto",
+        folder_preview=None,
     )
+
+
+def _add_page_context(**overrides: Any) -> dict[str, Any]:
+    context: dict[str, Any] = {
+        "tab": "rss",
+        "feed_url": "",
+        "preview": None,
+        "backfill": "3",
+        "folder_path": "",
+        "folder_title": "",
+        "folder_language": "auto",
+        "folder_preview": None,
+    }
+    context.update(overrides)
+    return context
 
 
 @app.post("/podcasts/add", response_class=HTMLResponse)
@@ -448,7 +482,12 @@ async def add_podcast_submit(request: Request):
     auto_process = form.get("auto_process") is not None
 
     if not feed_url:
-        return _render(request, "add_podcast.html", feed_url=feed_url, preview=None, backfill=backfill, err="Paste a feed URL.")
+        return _render(
+            request,
+            "add_podcast.html",
+            **_add_page_context(feed_url=feed_url, backfill=backfill),
+            err="Paste a feed URL.",
+        )
 
     if action == "add":
         try:
@@ -463,9 +502,7 @@ async def add_podcast_submit(request: Request):
             return _render(
                 request,
                 "add_podcast.html",
-                feed_url=feed_url,
-                preview=None,
-                backfill=backfill,
+                **_add_page_context(feed_url=feed_url, backfill=backfill),
                 err=str(exc),
             )
         return _redirect(
@@ -479,18 +516,193 @@ async def add_podcast_submit(request: Request):
         return _render(
             request,
             "add_podcast.html",
-            feed_url=feed_url,
-            preview=None,
-            backfill=backfill,
+            **_add_page_context(feed_url=feed_url, backfill=backfill),
             err=str(exc),
         )
     return _render(
         request,
         "add_podcast.html",
-        feed_url=feed_url,
-        preview=preview,
-        backfill=backfill,
+        **_add_page_context(feed_url=feed_url, preview=preview, backfill=backfill),
     )
+
+
+def _api_admin(request: Request) -> dict[str, Any]:
+    """Admin guard for JSON endpoints: 401 instead of a login redirect."""
+    try:
+        cfg, _session = security.require_admin(request)
+    except HTTPException as exc:
+        if exc.status_code in {303, 401}:
+            raise HTTPException(status_code=401, detail="Sign in again.") from exc
+        raise
+    return cfg
+
+
+@app.get("/api/fs/roots")
+def api_fs_roots(request: Request):
+    cfg = _api_admin(request)
+    return {"roots": folders.roots(cfg)}
+
+
+@app.get("/api/fs/list")
+def api_fs_list(request: Request, path: str = "", hidden: int = 0):
+    _cfg = _api_admin(request)
+    try:
+        return folders.browse(path, hidden=bool(hidden))
+    except folders.FolderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+COVER_NAMES = ("cover", "folder", "artwork", "poster", "front")
+
+
+def _folder_cover(root: Path) -> Path | None:
+    for stem in COVER_NAMES:
+        for ext in (".jpg", ".jpeg", ".png", ".webp"):
+            candidate = root / f"{stem}{ext}"
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def _folder_preview(root: Path) -> dict[str, Any]:
+    files = folders.list_audio_files(root)
+    rows = []
+    total = 0
+    for path in files[:60]:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        total += size
+        rows.append(
+            {
+                "name": folders.relative_tag(root, path),
+                "size": size,
+                "published_at": folders.published_at_for(path),
+            }
+        )
+    for path in files[60:]:
+        try:
+            total += path.stat().st_size
+        except OSError:
+            pass
+    return {
+        "path": str(root),
+        "count": len(files),
+        "files": rows,
+        "total_bytes": total,
+        "truncated": len(files) > len(rows),
+        "cover": _folder_cover(root),
+    }
+
+
+@app.post("/podcasts/add-folder", response_class=HTMLResponse)
+async def add_folder_submit(request: Request):
+    cfg, _session = security.require_admin(request)
+    form = await request.form()
+    action = str(form.get("action") or "preview")
+    raw_path = str(form.get("folder_path") or "").strip()
+    title = str(form.get("title") or "").strip()
+    language = str(form.get("language") or "auto")
+    context = _add_page_context(
+        tab="folder",
+        folder_path=raw_path,
+        folder_title=title,
+        folder_language=language,
+    )
+
+    try:
+        root = folders.normalize_path(raw_path, cfg)
+    except folders.FolderError as exc:
+        return _render(request, "add_podcast.html", **context, err=str(exc))
+
+    existing = db.get_podcast_by_feed_url(folders.feed_url_for(root))
+    if existing:
+        return _render(
+            request,
+            "add_podcast.html",
+            **context,
+            err=f"That folder is already added as “{existing['title']}”.",
+        )
+
+    try:
+        preview = _folder_preview(root)
+    except OSError as exc:
+        return _render(request, "add_podcast.html", **context, err=f"Cannot read folder: {exc}")
+
+    if not preview["count"]:
+        return _render(
+            request,
+            "add_podcast.html",
+            **context,
+            err=f"No audio files found in {root}.",
+        )
+
+    if action != "add":
+        context["folder_path"] = str(root)
+        context["folder_preview"] = preview
+        return _render(request, "add_podcast.html", **context)
+
+    try:
+        interval = max(5, int(str(form.get("scan_interval") or "30")))
+    except ValueError:
+        interval = 30
+    auto_process = form.get("auto_process") is not None
+    auto_publish = form.get("auto_publish") is not None
+
+    podcast = db.create_podcast(
+        {
+            "title": title or root.name or "Local folder",
+            "feed_url": folders.feed_url_for(root),
+            "description": f"Local folder: {root}",
+            "language": language,
+            "labels_json": "[]",
+            "auto_process": auto_process,
+            "auto_publish": auto_publish,
+            "backfill_limit": 0,
+            "poll_interval_minutes": interval,
+            "retention_days": None,
+            "feed_token": secrets.token_urlsafe(18),
+            "source_kind": "folder",
+            "source_path": str(root),
+        }
+    )
+    config.ensure_episode_dirs(cfg, podcast["slug"])
+
+    cover = preview.get("cover")
+    if cover:
+        try:
+            ext = cover.suffix.lower()
+            artwork_dir = config.artwork_dir()
+            artwork_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(cover, artwork_dir / f"{podcast['slug']}{ext}")
+            db.update_podcast(podcast["id"], artwork_path=f"{podcast['slug']}{ext}")
+            podcast = db.get_podcast(podcast["id"]) or podcast
+        except OSError:
+            pass
+
+    try:
+        result = folders.scan(podcast)
+    except folders.FolderError as exc:
+        return _redirect(
+            f"/podcasts/{podcast['slug']}",
+            err=f"Folder added, but the first scan failed: {exc}",
+        )
+    message = (
+        f"Added {podcast['title']}. {result['files']} audio file(s) found, "
+        f"{result['queued']} queued for processing."
+    )
+    return _redirect(f"/podcasts/{podcast['slug']}", msg=message)
+
+
+@app.post("/podcasts/{slug}/scan")
+def podcast_scan_now(request: Request, slug: str):
+    cfg, _session = security.require_admin(request)
+    podcast = _podcast_or_404(slug)
+    if (podcast.get("source_kind") or "rss") != "folder":
+        return _redirect(f"/podcasts/{slug}", err="This podcast is not a folder podcast.")
+    db.enqueue_job("scan", podcast_id=podcast["id"], priority=5, max_attempts=2)
+    return _redirect(f"/podcasts/{slug}", msg="Folder scan queued.")
 
 
 def _retention_from_config() -> int | None:
@@ -579,6 +791,7 @@ def podcast_page(request: Request, slug: str):
     status = None
     statuses = None
     selected_only = False
+    include_deleted = False
     if filter_name == "review":
         statuses = ("awaiting_review", "qa_failed")
     elif filter_name == "failed":
@@ -587,20 +800,29 @@ def podcast_page(request: Request, slug: str):
         status = "published"
     elif filter_name == "selected":
         selected_only = True
+    elif filter_name == "deleted":
+        status = "deleted"
+        include_deleted = True
 
     episodes = db.list_episodes(
         podcast["id"],
         status=status,
         statuses=statuses,
         selected_only=selected_only,
+        include_deleted=include_deleted,
         limit=per_page,
         offset=(page - 1) * per_page,
     )
     total = db.count_episodes(
-        podcast["id"], status=status, statuses=statuses, selected_only=selected_only
+        podcast["id"],
+        status=status,
+        statuses=statuses,
+        selected_only=selected_only,
+        include_deleted=include_deleted,
     )
     total_all = db.count_episodes(podcast["id"])
     selected_count = db.count_episodes(podcast["id"], selected_only=True)
+    deleted_count = db.count_episodes(podcast["id"], status="deleted", include_deleted=True)
     counts = db.episode_status_counts(podcast["id"])
     latest_jobs = db.latest_jobs_by_episode(podcast["id"])
     dirs = config.episode_dirs(cfg, slug)
@@ -617,18 +839,22 @@ def podcast_page(request: Request, slug: str):
 
     for episode in episodes:
         episode["_clean_present"] = episode.get("clean_filename") in clean_files
-        episode["_original_present"] = (
-            bool(episode.get("original_path"))
-            and Path(episode["original_path"]).name in original_names
-        )
+        if episode.get("source_path"):
+            # Folder podcast: the audio lives in the user's folder, never here.
+            episode["_original_present"] = Path(episode["source_path"]).is_file()
+        else:
+            episode["_original_present"] = (
+                bool(episode.get("original_path"))
+                and Path(episode["original_path"]).name in original_names
+            )
         episode["_latest_job"] = latest_jobs.get(int(episode["id"]))
         episode["_can_review"] = episode["status"] in {"awaiting_review", "qa_failed"} or bool(episode.get("review_json"))
+        episode["_busy"] = bool(
+            episode["_latest_job"]
+            and episode["_latest_job"]["state"] in {"queued", "running"}
+        )
         episode["_batch_processable"] = (
-            episode["status"] in BATCH_PROCESSABLE
-            and not (
-                episode["_latest_job"]
-                and episode["_latest_job"]["state"] in {"queued", "running"}
-            )
+            episode["status"] in BATCH_PROCESSABLE and not episode["_busy"]
         )
 
     art_url = rss.artwork_url(_base_url(cfg), podcast)
@@ -639,11 +865,14 @@ def podcast_page(request: Request, slug: str):
         request,
         "podcast.html",
         podcast=podcast,
+        is_folder=(podcast.get("source_kind") or "rss") == "folder",
+        source_path=podcast.get("source_path") or "",
         episodes=episodes,
         counts=counts,
         total=total,
         total_all=total_all,
         selected_count=selected_count,
+        deleted_count=deleted_count,
         page=page,
         pages=max(1, (total + per_page - 1) // per_page),
         filter=filter_name,
@@ -683,6 +912,19 @@ async def podcast_settings(request: Request, slug: str):
         except ValueError:
             retention = None
 
+    folder_notice = ""
+    if (podcast.get("source_kind") or "rss") == "folder":
+        raw_folder = str(form.get("source_path") or "").strip()
+        if raw_folder and raw_folder != (podcast.get("source_path") or ""):
+            try:
+                new_root = folders.normalize_path(raw_folder, cfg)
+            except folders.FolderError as exc:
+                return _redirect(f"/podcasts/{slug}", err=f"Folder: {exc}")
+            db.update_podcast(podcast["id"], source_path=str(new_root))
+            podcast = db.get_podcast(podcast["id"]) or podcast
+            moved = folders.remap_episodes(podcast, new_root)
+            folder_notice = f" {moved} episode(s) re-pointed to the new folder."
+
     db.update_podcast(
         podcast["id"],
         title=str(form.get("title") or podcast["title"]).strip() or podcast["title"],
@@ -698,7 +940,7 @@ async def podcast_settings(request: Request, slug: str):
         auto_process=1 if form.get("auto_process") is not None else 0,
         auto_publish=1 if form.get("auto_publish") is not None else 0,
     )
-    return _redirect(f"/podcasts/{slug}", msg="Settings saved.")
+    return _redirect(f"/podcasts/{slug}", msg="Settings saved." + folder_notice)
 
 
 def _validate_labels(labels_json: str) -> None:
@@ -730,23 +972,13 @@ async def episodes_batch_process(request: Request, slug: str):
     cfg, _session = security.require_admin(request)
     podcast = _podcast_or_404(slug)
     form = await request.form()
-    filter_name = str(form.get("filter") or "all")
-    if filter_name not in {"all", "selected", "review", "failed", "published"}:
-        filter_name = "all"
+    filter_name = _filter_name(form)
     accepted = 0
     skipped = 0
-    for raw in form.getlist("episode_ids"):
-        try:
-            episode_id = int(str(raw))
-        except (TypeError, ValueError):
+    for episode, latest in _selected_episodes(podcast, form):
+        if episode is None:
             skipped += 1
             continue
-        try:
-            episode = _episode_for_podcast(podcast, episode_id)
-        except HTTPException:
-            skipped += 1
-            continue
-        latest = db.latest_job_for_episode(episode["id"])
         if (
             episode["status"] not in BATCH_PROCESSABLE
             or (latest and latest["state"] in {"queued", "running"})
@@ -773,6 +1005,116 @@ def episode_process(request: Request, slug: str, episode_id: int):
     episode = _episode_for_podcast(podcast, episode_id)
     next_stage = _resume_episode(cfg, podcast, episode)
     return _redirect(f"/podcasts/{slug}", msg=f"Queued {next_stage}.")
+
+
+def _selected_episodes(podcast: dict[str, Any], form: Any):
+    """Yield (episode, latest_job) for the checked ids that belong to the show.
+
+    Unknown ids and ids from another podcast yield (None, None) so the caller
+    can count them as skipped.
+    """
+    for raw in form.getlist("episode_ids"):
+        try:
+            episode_id = int(str(raw))
+        except (TypeError, ValueError):
+            yield None, None
+            continue
+        try:
+            episode = _episode_for_podcast(podcast, episode_id)
+        except HTTPException:
+            yield None, None
+            continue
+        yield episode, db.latest_job_for_episode(episode["id"])
+
+
+def _batch_feedback(slug: str, filter_name: str, accepted: int, skipped: int, verb: str):
+    if not accepted:
+        return _redirect(
+            f"/podcasts/{slug}?filter={filter_name}",
+            err="No selected episodes were eligible or nothing was selected.",
+        )
+    message = f"{verb} {accepted} episode(s)."
+    if skipped:
+        message += f" Skipped {skipped} busy or invalid episode(s)."
+    return _redirect(f"/podcasts/{slug}?filter={filter_name}", msg=message)
+
+
+def _filter_name(form: Any) -> str:
+    filter_name = str(form.get("filter") or "all")
+    if filter_name not in {"all", "selected", "review", "failed", "published", "deleted"}:
+        return "all"
+    return filter_name
+
+
+@app.post("/podcasts/{slug}/episodes/batch-reprocess")
+async def episodes_batch_reprocess(request: Request, slug: str):
+    """Restart the full pipeline (download → process → publish) for a selection."""
+    cfg, _session = security.require_admin(request)
+    podcast = _podcast_or_404(slug)
+    form = await request.form()
+    filter_name = _filter_name(form)
+    accepted = skipped = 0
+    for episode, latest in _selected_episodes(podcast, form):
+        if episode is None:
+            skipped += 1
+            continue
+        if latest and latest["state"] == "running":
+            skipped += 1
+            continue
+        pipeline.reset_episode_for_reprocess(cfg, podcast, episode)
+        accepted += 1
+    return _batch_feedback(
+        slug, filter_name, accepted, skipped, "Queued a full reprocess (download → process → publish) for"
+    )
+
+
+@app.post("/podcasts/{slug}/episodes/batch-delete")
+async def episodes_batch_delete(request: Request, slug: str):
+    """Delete a selection of episodes, their files and their queue entries."""
+    cfg, _session = security.require_admin(request)
+    podcast = _podcast_or_404(slug)
+    form = await request.form()
+    filter_name = _filter_name(form)
+    accepted = skipped = 0
+    for episode, latest in _selected_episodes(podcast, form):
+        if episode is None:
+            skipped += 1
+            continue
+        if latest and latest["state"] == "running":
+            skipped += 1
+            continue
+        pipeline.delete_episode(cfg, podcast, episode)
+        accepted += 1
+    return _batch_feedback(slug, filter_name, accepted, skipped, "Deleted")
+
+
+@app.post("/podcasts/{slug}/episodes/{episode_id}/restore")
+def episode_restore(request: Request, slug: str, episode_id: int):
+    cfg, _session = security.require_admin(request)
+    podcast = _podcast_or_404(slug)
+    episode = _episode_for_podcast(podcast, episode_id)
+    if episode["status"] != "deleted":
+        return _redirect(f"/podcasts/{slug}", err="This episode is not deleted.")
+    db.update_episode(episode["id"], status="discovered", selected=0, error_message=None)
+    return _redirect(
+        f"/podcasts/{slug}",
+        msg="Restored. Use Download and process to fetch and rebuild it.",
+    )
+
+
+@app.post("/podcasts/{slug}/episodes/{episode_id}/reprocess")
+def episode_reprocess(request: Request, slug: str, episode_id: int):
+    cfg, _session = security.require_admin(request)
+    podcast = _podcast_or_404(slug)
+    episode = _episode_for_podcast(podcast, episode_id)
+    latest = db.latest_job_for_episode(episode_id)
+    if latest and latest["state"] == "running":
+        return _redirect(
+            f"/podcasts/{slug}",
+            err="This episode is being processed right now; try again when the job finishes.",
+        )
+    pipeline.reset_episode_for_reprocess(cfg, podcast, episode)
+    return _redirect(f"/podcasts/{slug}", msg="Queued a full reprocess (download → process → publish).")
 
 
 BATCH_PROCESSABLE = {"discovered", "downloaded", "skipped", "failed"}
@@ -835,6 +1177,8 @@ def review_page(request: Request, slug: str, episode_id: int):
         review=review,
         cuts=(review or {}).get("cuts") or [],
         has_original=bool(original and original.is_file()),
+        original_label=(str(original) if original else "not downloaded"),
+        original_in_place=bool(episode.get("source_path")),
         has_clean_preview=clean.is_file(),
         has_transcript=transcript.is_file(),
         latest_job=latest,

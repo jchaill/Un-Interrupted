@@ -87,7 +87,7 @@
         <dt>GUID</dt><dd class="small-break">{{ episode.guid }}</dd>
         <dt>Published</dt><dd>{{ episode.published_at | fmt_dt }}</dd>
         <dt>Original duration</dt><dd>{{ (episode.duration_original | duration) if episode.duration_original else '—' }}</dd>
-        <dt>Original file</dt><dd class="small-break">{{ episode.original_path or 'not downloaded' }}</dd>
+        <dt>Original file</dt><dd class="small-break">{{ original_label }}{% if original_in_place %} <span class="muted">(in your folder, not copied)</span>{% endif %}</dd>
         <dt>Engine</dt><dd>{{ episode.engine_version or tools.engine_version }}</dd>
       </dl>
       {% if episode.description %}<p class="muted clamp-4">{{ episode.description | strip_html(600) }}</p>{% endif %}
@@ -160,6 +160,10 @@
         <form method="post" action="/podcasts/{{ podcast.slug }}/episodes/{{ episode.id }}/recut">
           <button class="btn ghost wide" type="submit" {{ 'disabled' if not episode.approved_cuts_json }}>Re-cut approved ranges</button>
           <small class="muted">Use after a QA failure or if the clean file was deleted.</small>
+        </form>
+        <form method="post" action="/podcasts/{{ podcast.slug }}/episodes/{{ episode.id }}/reprocess">
+          <button class="btn ghost wide" type="submit" data-confirm="Delete this episode's download, transcript, cuts and clean audio, then run download → process → publish again?">Retry from scratch</button>
+          <small class="muted">Use after a crash or reboot: re-downloads and re-detects everything.</small>
         </form>
         <form method="post" action="/podcasts/{{ podcast.slug }}/episodes/{{ episode.id }}/skip">
           <button class="btn ghost wide" type="submit">Skip / keep original</button>

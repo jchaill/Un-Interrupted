@@ -157,7 +157,11 @@ Open the episode review page and the job log. Common causes:
   bad file. Adjust the cut end and re-cut.
 
 After fixing, **Re-detect** (fast, uses the existing transcript) or **Process**
-(resumes from the earliest missing stage).
+(resumes from the earliest missing stage). If anything on disk is suspect —
+typically after a reboot or crash during processing — use the **Full retry**
+checkbox action (or **Reprocess** on a published row): it wipes the download,
+transcript, cuts, review and clean audio for those episodes and runs
+`download → process → publish` again from scratch.
 
 ### The feed has no episodes
 
@@ -264,6 +268,14 @@ Then re-subscribe in Downcast/Apple Podcasts with the new URL.
 ---
 
 ## Storage
+
+### The folder browser shows nothing / refuses a folder
+
+The picker lists folders the app can read, so a permission error or an unmounted
+network drive shows up there first. Use **Show hidden folders** for dot-folders,
+and type a path directly in the field if a folder is slow to list. A folder inside
+the app's data directory or inside the podcast library is deliberately refused —
+pick the folder that holds your audio instead.
 
 ### “The new storage folder must be empty”
 

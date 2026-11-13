@@ -30,6 +30,9 @@ EPISODE_STATUSES = (
     "published",
     "failed",
     "skipped",
+    # Tombstone: the row is kept so the next feed poll does not resurrect the
+    # episode, but its files are gone and it is hidden from every listing.
+    "deleted",
 )
 
 ACTIVE_JOB_STATES = ("queued", "running")
@@ -76,6 +79,10 @@ def init_db() -> None:
         # Future migrations go here, one block per version.
         _ensure_column(conn, "episodes", "clean_published_at", "TEXT")
         _ensure_column(conn, "episodes", "llm_json", "TEXT")
+        # Local-folder podcasts: the audio stays where the user keeps it.
+        _ensure_column(conn, "podcasts", "source_kind", "TEXT DEFAULT 'rss'")
+        _ensure_column(conn, "podcasts", "source_path", "TEXT")
+        _ensure_column(conn, "episodes", "source_path", "TEXT")
         conn.execute(
             "INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)",
             ("default_retention_days", str(config.load_config().get("default_retention_days", 30))),
@@ -272,8 +279,9 @@ def create_podcast(fields: dict[str, Any]) -> dict[str, Any]:
                 category, explicit, artwork_url, artwork_path, labels_json,
                 ad_show_stop, ad_lang, auto_process, auto_publish, backfill_limit,
                 poll_interval_minutes, retention_days, feed_token, last_polled_at,
-                last_etag, last_modified, last_error, created_at, updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                last_etag, last_modified, last_error, created_at, updated_at,
+                source_kind, source_path
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 slug,
@@ -302,6 +310,8 @@ def create_podcast(fields: dict[str, Any]) -> dict[str, Any]:
                 None,
                 now,
                 now,
+                fields.get("source_kind") or "rss",
+                fields.get("source_path"),
             ),
         )
         podcast_id = int(cur.lastrowid)
@@ -330,7 +340,8 @@ PODCAST_EDITABLE = {
     "last_etag",
     "last_modified",
     "last_error",
-    # feed_url and slug are intentionally immutable.
+    "source_path",
+    # feed_url, slug and source_kind are intentionally immutable.
 }
 
 
@@ -376,10 +387,13 @@ def list_episodes(
     status: str | None = None,
     statuses: tuple[str, ...] | None = None,
     selected_only: bool = False,
+    include_deleted: bool = False,
     limit: int = 200,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
     where = ["podcast_id=?"]
+    if not include_deleted:
+        where.append("status != 'deleted'")
     params: list[Any] = [podcast_id]
     if statuses:
         where.append("status IN (" + ",".join("?" for _ in statuses) + ")")
@@ -409,8 +423,11 @@ def count_episodes(
     status: str | None = None,
     statuses: tuple[str, ...] | None = None,
     selected_only: bool = False,
+    include_deleted: bool = False,
 ) -> int:
     where = ["podcast_id=?"]
+    if not include_deleted:
+        where.append("status != 'deleted'")
     params: list[Any] = [podcast_id]
     if statuses:
         where.append("status IN (" + ",".join("?" for _ in statuses) + ")")
@@ -432,11 +449,13 @@ def episode_status_counts(podcast_id: int | None = None) -> dict[str, int]:
     with connect() as conn:
         if podcast_id is None:
             rows = conn.execute(
-                "SELECT status, COUNT(*) AS n FROM episodes GROUP BY status"
+                "SELECT status, COUNT(*) AS n FROM episodes "
+                "WHERE status != 'deleted' GROUP BY status"
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT status, COUNT(*) AS n FROM episodes WHERE podcast_id=? GROUP BY status",
+                "SELECT status, COUNT(*) AS n FROM episodes "
+                "WHERE podcast_id=? AND status != 'deleted' GROUP BY status",
                 (podcast_id,),
             ).fetchall()
     return {r["status"]: int(r["n"]) for r in rows}
@@ -539,6 +558,7 @@ EPISODE_EDITABLE = {
     "review_json",
     "llm_json",
     "engine_version",
+    "source_path",
     "error_message",
     "downloaded_at",
     "published_at",
@@ -572,7 +592,8 @@ def episode_feed_items(podcast_id: int) -> list[dict[str, Any]]:
         rows = conn.execute(
             """
             SELECT * FROM episodes
-            WHERE podcast_id=? AND (clean_filename IS NOT NULL OR status='published')
+            WHERE podcast_id=? AND status != 'deleted'
+              AND (clean_filename IS NOT NULL OR status='published')
             ORDER BY COALESCE(published_at, discovered_at) DESC
             """,
             (podcast_id,),
@@ -748,6 +769,30 @@ def cancel_job(job_id: int) -> bool:
             (now_iso(), job_id),
         )
         return cur.rowcount > 0
+
+
+def cancel_queued_jobs(episode_id: int) -> int:
+    """Cancel the queued jobs of one episode; running jobs are left alone."""
+    with _WRITE_LOCK, connect() as conn:
+        cur = conn.execute(
+            "UPDATE jobs SET state='canceled', finished_at=?, error='canceled by user' "
+            "WHERE episode_id=? AND state='queued'",
+            (now_iso(), episode_id),
+        )
+        return cur.rowcount
+
+
+def list_jobs_for_episode(episode_id: int) -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM jobs WHERE episode_id=? ORDER BY id", (episode_id,)
+        ).fetchall()
+    return _rows(rows)
+
+
+def delete_jobs_for_episode(episode_id: int) -> None:
+    with _WRITE_LOCK, connect() as conn:
+        conn.execute("DELETE FROM jobs WHERE episode_id=?", (episode_id,))
 
 
 def retry_job(job_id: int) -> bool:

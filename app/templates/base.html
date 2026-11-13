@@ -4,10 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Un-Interupted{% endblock %}</title>
-  <link rel="stylesheet" href="/static/app.css">
-  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <script src="/static/htmx.min.js" defer></script>
-  <script src="/static/app.js" defer></script>
+  <link rel="stylesheet" href="{{ static_url('app.css') }}">
+  <link rel="icon" href="{{ static_url('favicon.svg') }}" type="image/svg+xml">
+  <script src="{{ static_url('htmx.min.js') }}" defer></script>
+  <script src="{{ static_url('app.js') }}" defer></script>
+  <script src="{{ static_url('picker.js') }}" defer></script>
 </head>
 <body>
   {% if is_admin and path not in ['/setup', '/setup/toolchain', '/login'] %}

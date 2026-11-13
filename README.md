@@ -141,6 +141,57 @@ app resumes each episode from whatever stage is already on disk (download,
 transcribe, detect, cut, QA, publish). The header checkbox selects every
 eligible episode on the current page.
 
+### Full retry and delete
+
+Every episode in the table is selectable (rows with a queued or running job are
+not). Two more batch actions sit next to **Download and process selected**:
+
+- **Full retry (download → process → publish)** deletes the episode's original
+  download, transcript, cuts, review and any published clean audio, then runs the
+  whole pipeline again from a fresh download. Use it after a crash, a reboot, a
+  corrupted download, or any failure you do not want to resume from. The
+  **Reprocess** button on a published row does the same for one episode.
+- **Delete selected** removes the episodes from disk: originals, `.part` files,
+  pre-converted audio, transcripts, cuts, reviews, cleaned files, job logs and
+  any published clean audio, plus their stale entries in `work/index.json`. A
+  deleted published episode disappears from the private feed. The row is kept as
+  a tombstone so the next poll does not re-download it; it is hidden from every
+  list but stays visible under the **Deleted** tab, where **Restore** brings it
+  back (then use **Download and process** to rebuild it).
+
+### Folder podcasts
+
+**Add a podcast → From a folder** turns an existing folder of audio files into a
+podcast of its own, with the same private feed, ad detection and review flow.
+
+- **Browse instead of typing.** **Browse…** opens an in-app folder browser (the
+  app runs on the machine that holds the files, so it lists real folders with
+  breadcrumbs, shortcuts for Home/Desktop/Downloads/iCloud/volumes and an audio
+  file count per folder). The same button appears next to the source path in the
+  podcast settings, which is the usual way to re-point a folder after an external
+  drive remounts under a different name.
+- **Nothing is copied, moved or deleted.** The app reads your files where they
+  are, so the folder stays the single copy you manage. The **download** stage for
+  these episodes only checks that the file is still there.
+- Each audio file becomes one episode. The title comes from the file name (a
+  leading `YYYY-MM-DD` is stripped into the publication date; otherwise the file's
+  modification date is used). Sub-folders are scanned too, six levels deep.
+- The folder is rescanned on a per-podcast interval, next to the source path in
+  the podcast settings. **Scan folder now** runs it immediately. A file only
+  enters once: identity is the path relative to the folder, so moving or renaming
+  a file adds a new episode and leaves the old one alone.
+- Deleting an episode removes only its derived files (transcript, cuts, review,
+  clean audio) — never the source. Restoring it re-scans from the original path.
+- Changing the source path re-points existing episodes whose relative path still
+  exists under the new folder, which is the usual case after moving the folder or
+  remounting a drive at a different mount point.
+- `cover.jpg`, `folder.jpg` or `artwork.png` in the folder is used as the podcast
+  artwork.
+
+Files are read in place, so keep the folder mounted while episodes are processed
+or replayed. A missing file fails its episode with a clear message instead of
+silently downloading or deleting anything.
+
 ---
 
 ## AI ad detection (Ollama)
@@ -393,6 +444,8 @@ See [docs/troubleshooting.md](docs/troubleshooting.md) for:
 - Overcast/Pocket Casts/Castro need a publicly reachable feed because they crawl
   RSS server-side; Downcast and Apple Podcasts fetch it on-device.
 - Public RSS feeds only (no Patreon/private feed auth).
+- Folder podcasts read files in place, so the folder must stay available while
+  an episode is processed; there is no copy to fall back on.
 - Ad detection still needs per-show calibration; ambiguous cuts are flagged.
 - Non-MP3 audio uses a re-encode fallback (implemented, not yet exercised on a
   real feed).

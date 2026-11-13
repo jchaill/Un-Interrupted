@@ -1,0 +1,33 @@
+{# Folder picker: opened by any element with data-path-picker="#input-selector". #}
+<dialog id="folder-picker" class="picker-dialog" aria-label="Choose a folder">
+  <div class="picker-inner">
+    <div class="picker-head">
+      <h2>Choose a folder</h2>
+      <button class="btn ghost small" type="button" data-picker-close>Close</button>
+    </div>
+
+    <div class="picker-bar">
+      <button class="btn ghost small" type="button" data-picker-up title="Go to the parent folder">↑</button>
+      <input class="picker-path" type="text" data-picker-path spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="Folder path">
+      <button class="btn ghost small" type="button" data-picker-go>Open</button>
+    </div>
+
+    <div class="picker-shortcuts" data-picker-roots></div>
+    <nav class="picker-crumbs" data-picker-crumbs aria-label="Breadcrumb"></nav>
+
+    <ul class="picker-list" data-picker-list tabindex="0" role="listbox" aria-label="Sub-folders"></ul>
+
+    <div class="picker-status" data-picker-status role="status"></div>
+
+    <div class="picker-foot">
+      <label class="inline-field">
+        <input type="checkbox" data-picker-hidden>
+        <span>Show hidden folders</span>
+      </label>
+      <div class="form-actions">
+        <button class="btn ghost" type="button" data-picker-close>Cancel</button>
+        <button class="btn primary" type="button" data-picker-select>Use this folder</button>
+      </div>
+    </div>
+  </div>
+</dialog>

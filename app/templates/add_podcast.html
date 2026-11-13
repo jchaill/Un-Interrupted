@@ -4,11 +4,103 @@
 <div class="page-head">
   <div>
     <h1>Add a podcast</h1>
-    <p class="muted">Paste the official RSS feed. The phone only ever subscribes to the clean feed generated here.</p>
+    <p class="muted">Add an official RSS feed, or turn an existing folder of audio files into a clean podcast feed.</p>
   </div>
   <a class="btn ghost" href="/podcasts/import">Import OPML</a>
 </div>
 
+<div class="tabs">
+  <a href="/podcasts/add" class="{{ 'active' if tab != 'folder' else '' }}">From an RSS feed</a>
+  <a href="/podcasts/add?tab=folder" class="{{ 'active' if tab == 'folder' else '' }}">From a folder</a>
+</div>
+
+{% if tab == 'folder' %}
+<section class="card">
+  <form method="post" action="/podcasts/add-folder" class="form-grid">
+    <input type="hidden" name="action" value="preview">
+    <label class="field span-2">
+      <span>Folder</span>
+      <div class="input-row">
+        <input type="text" id="folder-path" name="folder_path" value="{{ folder_path }}" placeholder="~/Podcasts/My archive" required autofocus spellcheck="false">
+        <button class="btn ghost" type="button" data-path-picker="#folder-path">Browse…</button>
+      </div>
+      <small>Absolute path, or start with <code>~/</code>. Audio files stay where they are: nothing is copied, moved or deleted.</small>
+    </label>
+    <label class="field">
+      <span>Title in your library</span>
+      <input type="text" name="title" value="{{ folder_title }}" placeholder="Defaults to the folder name">
+    </label>
+    <label class="field">
+      <span>Language</span>
+      <select name="language">
+        {% for lang in ['auto','fr','en','es','de','it','pt','nl'] %}
+        <option value="{{ lang }}" {{ 'selected' if folder_language == lang else '' }}>{{ lang }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="span-2 form-actions">
+      <button class="btn primary" type="submit">Preview folder</button>
+    </div>
+  </form>
+</section>
+
+{% if folder_preview %}
+<section class="card preview-card">
+  <div class="preview-head">
+    {% if folder_preview.cover %}
+    <div class="preview-art placeholder">Cover found: {{ folder_preview.cover.name }}</div>
+    {% else %}
+    <div class="preview-art placeholder">Folder</div>
+    {% endif %}
+    <div class="grow">
+      <h2>{{ folder_preview.path }}</h2>
+      <p class="muted">{{ folder_preview.count }} audio file(s) · {{ folder_preview.total_bytes | human_size }}{% if folder_preview.truncated %} · listing the first {{ folder_preview.files | length }}{% endif %}</p>
+      <p class="muted">Each file becomes one episode, using its name for the title and a leading <code>YYYY-MM-DD</code> (or its file date) for the publication date.</p>
+    </div>
+  </div>
+
+  <details class="preview-episodes" open>
+    <summary>Files</summary>
+    <ol class="episode-list">
+      {% for f in folder_preview.files %}
+      <li>
+        <span class="ep-date">{{ f.published_at | fmt_dt('%b %d, %Y') }}</span>
+        <span class="grow">{{ f.name }}</span>
+        <span class="muted">{{ f.size | human_size }}</span>
+      </li>
+      {% endfor %}
+    </ol>
+  </details>
+
+  <form method="post" action="/podcasts/add-folder" class="form-grid confirm-form">
+    <input type="hidden" name="action" value="add">
+    <input type="hidden" name="folder_path" value="{{ folder_preview.path }}">
+    <input type="hidden" name="title" value="{{ folder_title }}">
+    <input type="hidden" name="language" value="{{ folder_language }}">
+    <label class="field">
+      <span>Scan interval (minutes)</span>
+      <input type="number" name="scan_interval" min="5" value="30">
+      <small>How often the folder is checked for new files. Editable later in the podcast settings.</small>
+    </label>
+    <label class="field checkbox-field">
+      <input type="checkbox" name="auto_process" checked>
+      <span>Process new files automatically</span>
+      <small>Transcribe, detect ads, cut. Episodes still wait for review unless auto-publish is on.</small>
+    </label>
+    <label class="field checkbox-field">
+      <input type="checkbox" name="auto_publish">
+      <span>Publish without review</span>
+      <small>Removes the review step for this folder. QA still runs.</small>
+    </label>
+    <div class="span-2 form-actions">
+      <button class="btn primary" type="submit">Add folder podcast</button>
+      <a class="btn ghost" href="/podcasts/add?tab=folder">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endif %}
+
+{% else %}
 <section class="card">
   <form method="post" action="/podcasts/add" class="feed-form">
     <input type="hidden" name="action" value="preview">
@@ -83,4 +175,7 @@
   </form>
 </section>
 {% endif %}
+{% endif %}
+
+{% include "_folder_picker.html" %}
 {% endblock %}
