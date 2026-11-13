@@ -327,7 +327,7 @@ access and roughly 1 GB of free space.
 
 ## 11. Testing
 
-`tests/` (68 tests, no ffmpeg/whisper required):
+`tests/` (69 tests, no ffmpeg/whisper required):
 
 - slug/filename/duration/safe-join helpers
 - RSS/OPML parsing (including real-world fixture shape)

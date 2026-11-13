@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -799,6 +801,30 @@ def test_folder_picker_api_lists_directories(app_env, tmp_path):
     bad = client.get("/api/fs/list", params={"path": str(tmp_path / "nope")})
     assert bad.status_code == 400
     assert "not found" in bad.json()["detail"].lower()
+
+
+def test_cached_dir_size_returns_immediately(tmp_path, monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_size(path, *, limit_files=20000):
+        started.set()
+        release.wait(2)
+        return 1234
+
+    monkeypatch.setattr(web, "_dir_size", slow_size)
+    web._DIR_SIZE_CACHE.clear()
+    web._DIR_SIZE_PENDING.clear()
+
+    assert web._cached_dir_size(tmp_path) is None
+    assert started.wait(1)
+    release.set()
+    key = (str(tmp_path), 20000)
+    for _ in range(100):
+        if key in web._DIR_SIZE_CACHE:
+            break
+        time.sleep(0.01)
+    assert web._cached_dir_size(tmp_path) == 1234
 
 
 def test_folder_picker_api_requires_admin(app_env):

@@ -9,6 +9,8 @@ import os
 import re
 import secrets
 import shutil
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -187,6 +189,41 @@ def _dir_size(path: Path, *, limit_files: int = 20000) -> int:
             if count >= limit_files:
                 return total
     return total
+
+
+# Directory sizes live on the (often network-mounted) podcast library. Walking
+# tens of thousands of SMB entries can take minutes, so pages never wait for it:
+# they render the last known value and a daemon thread refreshes it.
+_DIR_SIZE_CACHE: dict[tuple[str, int], tuple[float, int]] = {}
+_DIR_SIZE_PENDING: set[tuple[str, int]] = set()
+_DIR_SIZE_LOCK = threading.Lock()
+_DIR_SIZE_TTL = 300.0
+
+
+def _cached_dir_size(
+    path: Path, *, limit_files: int = 20000, max_age: float = _DIR_SIZE_TTL
+) -> int | None:
+    key = (str(path), limit_files)
+    now = time.monotonic()
+    with _DIR_SIZE_LOCK:
+        cached = _DIR_SIZE_CACHE.get(key)
+        if cached and (now - cached[0] < max_age or key in _DIR_SIZE_PENDING):
+            return cached[1]
+        if key in _DIR_SIZE_PENDING:
+            return cached[1] if cached else None
+        _DIR_SIZE_PENDING.add(key)
+
+    def refresh() -> None:
+        try:
+            value = _dir_size(path, limit_files=limit_files)
+        except Exception:
+            value = 0
+        with _DIR_SIZE_LOCK:
+            _DIR_SIZE_CACHE[key] = (time.monotonic(), value)
+            _DIR_SIZE_PENDING.discard(key)
+
+    threading.Thread(target=refresh, name="dir-size", daemon=True).start()
+    return cached[1] if cached else None
 
 
 def _podcast_or_404(slug: str) -> dict[str, Any]:
@@ -419,7 +456,7 @@ def dashboard(request: Request):
         disk = shutil.disk_usage(root if root.exists() else Path.home())
     except OSError:
         disk = None
-    library_bytes = _dir_size(config.podcasts_root(cfg), limit_files=50000)
+    library_bytes = _cached_dir_size(config.podcasts_root(cfg), limit_files=50000)
     return _render(
         request,
         "dashboard.html",
@@ -826,27 +863,8 @@ def podcast_page(request: Request, slug: str):
     counts = db.episode_status_counts(podcast["id"])
     latest_jobs = db.latest_jobs_by_episode(podcast["id"])
     dirs = config.episode_dirs(cfg, slug)
-    clean_files = {
-        p.name
-        for p in dirs["episodes"].iterdir()
-        if p.is_file() and is_audio_filename(p.name)
-    } if dirs["episodes"].exists() else set()
-    original_names = {
-        Path(e["original_path"]).name
-        for e in db.list_episodes(podcast["id"], limit=1000)
-        if e.get("original_path")
-    }
 
     for episode in episodes:
-        episode["_clean_present"] = episode.get("clean_filename") in clean_files
-        if episode.get("source_path"):
-            # Folder podcast: the audio lives in the user's folder, never here.
-            episode["_original_present"] = Path(episode["source_path"]).is_file()
-        else:
-            episode["_original_present"] = (
-                bool(episode.get("original_path"))
-                and Path(episode["original_path"]).name in original_names
-            )
         episode["_latest_job"] = latest_jobs.get(int(episode["id"]))
         episode["_can_review"] = episode["status"] in {"awaiting_review", "qa_failed"} or bool(episode.get("review_json"))
         episode["_busy"] = bool(
@@ -882,8 +900,8 @@ def podcast_page(request: Request, slug: str):
         qr_url=f"/qr/{podcast['slug']}.svg",
         retention=("" if retention is None else str(retention)),
         retention_options=["", "0", "7", "14", "30", "60", "90", "180", "365"],
-        library_bytes=_dir_size(dirs["episodes"]),
-        original_bytes=_dir_size(dirs["originals"]),
+        library_bytes=_cached_dir_size(dirs["episodes"]),
+        original_bytes=_cached_dir_size(dirs["originals"]),
         tools_ready=_tools_ready(),
         labels_json=podcast.get("labels_json") or "[]",
         jobs=latest_jobs,
@@ -1559,7 +1577,7 @@ def settings_page(request: Request):
         storage_root=str(root),
         app_home=str(config.app_home()),
         disk=disk,
-        library_bytes=_dir_size(config.podcasts_root(cfg), limit_files=50000),
+        library_bytes=_cached_dir_size(config.podcasts_root(cfg), limit_files=50000),
         podcast_count=len(db.list_podcasts()),
         llm=llm_opts,
         llm_discovery=llm_discovery,
