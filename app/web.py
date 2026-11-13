@@ -20,6 +20,7 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 
 from . import __version__, artwork, config, db, feeds, folders, pipeline, rss, security, toolchain
 from .engine import adapter, llm
@@ -663,7 +664,7 @@ async def add_folder_submit(request: Request):
         )
 
     try:
-        preview = _folder_preview(root)
+        preview = await run_in_threadpool(_folder_preview, root)
     except OSError as exc:
         return _render(request, "add_podcast.html", **context, err=f"Cannot read folder: {exc}")
 
@@ -719,7 +720,7 @@ async def add_folder_submit(request: Request):
             pass
 
     try:
-        result = folders.scan(podcast)
+        result = await run_in_threadpool(folders.scan, podcast)
     except folders.FolderError as exc:
         return _redirect(
             f"/podcasts/{podcast['slug']}",
@@ -940,7 +941,7 @@ async def podcast_settings(request: Request, slug: str):
                 return _redirect(f"/podcasts/{slug}", err=f"Folder: {exc}")
             db.update_podcast(podcast["id"], source_path=str(new_root))
             podcast = db.get_podcast(podcast["id"]) or podcast
-            moved = folders.remap_episodes(podcast, new_root)
+            moved = await run_in_threadpool(folders.remap_episodes, podcast, new_root)
             folder_notice = f" {moved} episode(s) re-pointed to the new folder."
 
     db.update_podcast(
@@ -1003,7 +1004,7 @@ async def episodes_batch_process(request: Request, slug: str):
         ):
             skipped += 1
             continue
-        _resume_episode(cfg, podcast, episode)
+        await run_in_threadpool(_resume_episode, cfg, podcast, episode)
         accepted += 1
     if not accepted:
         return _redirect(
@@ -1079,7 +1080,7 @@ async def episodes_batch_reprocess(request: Request, slug: str):
         if latest and latest["state"] == "running":
             skipped += 1
             continue
-        pipeline.reset_episode_for_reprocess(cfg, podcast, episode)
+        await run_in_threadpool(pipeline.reset_episode_for_reprocess, cfg, podcast, episode)
         accepted += 1
     return _batch_feedback(
         slug, filter_name, accepted, skipped, "Queued a full reprocess (download → process → publish) for"
@@ -1101,7 +1102,7 @@ async def episodes_batch_delete(request: Request, slug: str):
         if latest and latest["state"] == "running":
             skipped += 1
             continue
-        pipeline.delete_episode(cfg, podcast, episode)
+        await run_in_threadpool(pipeline.delete_episode, cfg, podcast, episode)
         accepted += 1
     return _batch_feedback(slug, filter_name, accepted, skipped, "Deleted")
 
